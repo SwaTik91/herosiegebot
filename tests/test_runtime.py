@@ -14,7 +14,12 @@ from hero_siege_bot import cli
 from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.config import CombatConfig, ExplorationConfig
-from hero_siege_bot.diagnostics import DiagnosticsOverlay, JsonlRecorder
+from hero_siege_bot.diagnostics import (
+    CHROMA_KEY_BGR,
+    DiagnosticsOverlay,
+    JsonlRecorder,
+    compose_live_overlay,
+)
 from hero_siege_bot.domain import (
     Action,
     BotState,
@@ -1306,6 +1311,62 @@ def test_overlay_draws_yolo_boxes_without_using_them_as_combat_markers() -> None
     assert "vein" in " ".join(
         str(item) for item in (observed.yolo[0].kind,)
     )
+
+
+def test_compose_live_overlay_uses_chroma_key_and_draws_boxes() -> None:
+    observed = observation(
+        yolo=(
+            Detection(
+                "vein",
+                Point(0.25, 0.5),
+                0.88,
+                bbox=Rect(5, 10, 20, 12),
+            ),
+        )
+    )
+
+    rendered = compose_live_overlay(observed, 40, 60)
+
+    assert rendered[0, 0].tolist() == list(CHROMA_KEY_BGR)
+    assert rendered[10, 5].tolist() != list(CHROMA_KEY_BGR)
+
+
+class OverlaySpy:
+    def __init__(self) -> None:
+        self.shown: list[tuple[object, Rect]] = []
+        self.closed = False
+
+    def show(self, image: object, client_rect: Rect) -> None:
+        self.shown.append((image, client_rect))
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_runtime_pushes_live_overlay_on_calibrated_step(
+    runtime_parts: dict[str, object],
+) -> None:
+    overlay = OverlaySpy()
+    runtime_parts["live_overlay"] = overlay
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.EXPLORING
+    assert len(overlay.shown) == 1
+    assert overlay.shown[0][1] == Rect(0, 0, 20, 20)
+
+
+def test_runtime_run_closes_live_overlay(
+    runtime_parts: dict[str, object],
+) -> None:
+    overlay = OverlaySpy()
+    runtime_parts["live_overlay"] = overlay
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    stop = threading.Event()
+    stop.set()
+
+    runtime.run(stop)
+
+    assert overlay.closed is True
 
 
 def exploration_config() -> ExplorationConfig:

@@ -111,6 +111,7 @@ def test_default_yolo_is_observe_only_with_user_weights() -> None:
     assert config.yolo.observe_only is True
     assert config.yolo.weights == "models/hero-siege-yolo11n-user-v1.pt"
     assert config.yolo.confidence == 0.35
+    assert config.recording.live_overlay is True
 
 
 @pytest.mark.parametrize("contents", ["{}", "calibration: {}"])

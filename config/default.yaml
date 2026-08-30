@@ -71,6 +71,7 @@ recording:
   enabled: true
   overlay: true
   frame_interval_s: 1.0
+  live_overlay: true
 
 yolo:
   enabled: true

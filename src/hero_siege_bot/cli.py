@@ -28,6 +28,7 @@ from hero_siege_bot.detectors import (
     YoloDetector,
 )
 from hero_siege_bot.diagnostics import DiagnosticsOverlay, JsonlRecorder
+from hero_siege_bot.live_overlay import create_live_overlay
 from hero_siege_bot.domain import BotState
 from hero_siege_bot.exploration import FrontierExplorer
 from hero_siege_bot.input import (
@@ -294,6 +295,7 @@ def build_runtime(
         detection_confidence=config.combat.detection_confidence,
         state_reporter=_print_state,
         calibration_reporter=_print_calibration_diagnostic,
+        live_overlay=create_live_overlay(enabled=config.recording.live_overlay),
     )
 
 

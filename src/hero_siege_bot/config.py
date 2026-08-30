@@ -233,6 +233,7 @@ class RecordingConfig:
     enabled: bool
     overlay: bool
     frame_interval_s: float
+    live_overlay: bool = True
 
     def __post_init__(self) -> None:
         _positive("frame_interval_s", self.frame_interval_s)
@@ -313,7 +314,12 @@ _DEFAULTS: dict[str, object] = {
         "progress_min_reveal_pixels": 2,
         "no_progress_sample_limit": 3,
     },
-    "recording": {"enabled": True, "overlay": True, "frame_interval_s": 1.0},
+    "recording": {
+        "enabled": True,
+        "overlay": True,
+        "frame_interval_s": 1.0,
+        "live_overlay": True,
+    },
     "yolo": {
         "enabled": True,
         "observe_only": True,
@@ -509,6 +515,7 @@ def load_config(path: Path) -> BotConfig:
             enabled=_bool(recording, "enabled"),
             overlay=_bool(recording, "overlay"),
             frame_interval_s=_float(recording, "frame_interval_s"),
+            live_overlay=_bool(recording, "live_overlay"),
         ),
         yolo=YoloConfig(
             enabled=_bool(yolo, "enabled"),

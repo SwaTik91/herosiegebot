@@ -16,6 +16,31 @@ from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.domain import Action, BotState, Detection, Observation, Point, Rect
 
 _DEFAULT_OVERLAY = object()
+CHROMA_KEY_BGR = (255, 0, 255)
+
+
+def compose_live_overlay(
+    observation: Observation,
+    height: int,
+    width: int,
+) -> NDArray[np.uint8]:
+    """Boxes on a chroma-key background so a click-through overlay stays transparent."""
+    rendered = np.full((height, width, 3), CHROMA_KEY_BGR, dtype=np.uint8)
+    painter = DiagnosticsOverlay()
+    for detection in observation.yolo:
+        painter._yolo_box(rendered, detection)
+    status = f"yolo {len(observation.yolo)}"
+    cv2.putText(
+        rendered,
+        status,
+        (8, 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 255, 0),
+        1,
+        cv2.LINE_8,
+    )
+    return rendered
 
 
 class DiagnosticsOverlay:

@@ -10,6 +10,7 @@ from typing import Protocol
 from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.controllers import COMBAT_TARGET_MATCH_RADIUS_NORMALIZED
+from hero_siege_bot.diagnostics import compose_live_overlay
 from hero_siege_bot.domain import (
     Action,
     BotState,
@@ -109,6 +110,7 @@ class BotRuntime:
         state_machine: BotStateMachine | None = None,
         state_reporter: Callable[[BotState], None] | None = None,
         calibration_reporter: Callable[[str], None] | None = None,
+        live_overlay: object | None = None,
     ) -> None:
         if not 0.0 <= calibration_confidence <= 1.0:
             raise ValueError("calibration_confidence must be between 0.0 and 1.0")
@@ -148,6 +150,7 @@ class BotRuntime:
         self._calibration_reporter = calibration_reporter
         self._calibration_diagnostic: str | None = None
         self._last_reported_calibration_diagnostic: str | None = None
+        self._live_overlay = live_overlay
 
     def step(self) -> BotState:
         if self._last_reported_state is None:
@@ -240,6 +243,7 @@ class BotRuntime:
                         (),
                         calibration,
                     )
+                self._show_live_overlay(captured, observed)
                 self._invalidate_calibration()
                 return BotState.PAUSED
 
@@ -249,6 +253,7 @@ class BotRuntime:
             if self.recorder is not None:
                 self.recorder.record(observed, state, actions)
                 self._record_frame(captured, observed, state, actions, calibration)
+            self._show_live_overlay(captured, observed)
             self.input.execute(actions)
             if state is BotState.RESTARTING:
                 self._invalidate_calibration()
@@ -265,6 +270,9 @@ class BotRuntime:
             while not stop.is_set():
                 self.step()
         finally:
+            closer = getattr(self._live_overlay, "close", None)
+            if callable(closer):
+                closer()
             self.input.close()
 
     def _ensure_calibration(
@@ -538,6 +546,18 @@ class BotRuntime:
         if key is None:
             return None
         return {"W": "S", "S": "W", "A": "D", "D": "A"}.get(key)
+
+    def _show_live_overlay(
+        self, captured: CapturedFrame, observation: Observation
+    ) -> None:
+        overlay = self._live_overlay
+        if overlay is None:
+            return
+        show = getattr(overlay, "show", None)
+        if not callable(show):
+            return
+        height, width = captured.image.shape[:2]
+        show(compose_live_overlay(observation, height, width), captured.client_rect)
 
     def _record_frame(
         self,
