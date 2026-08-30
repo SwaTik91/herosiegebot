@@ -1,0 +1,43 @@
+window:
+  title: Hero Siege
+
+controls:
+  movement:
+    up: W
+    left: A
+    down: S
+    right: D
+  skills: [Q, E]
+  potions: ["1", "2"]
+  emergency_stop: F12
+
+calibration:
+  confidence_threshold: 0.9
+  min_stable_frames: 3
+  min_scale: 0.5
+  max_scale: 1.5
+  scale_step: 0.05
+
+survival:
+  health_threshold: 0.35
+  resource_threshold: 0.25
+  potion_cooldown_s: 1.0
+
+combat:
+  detection_confidence: 0.7
+  attack_hold_s: 0.25
+  skill_cooldowns_s:
+    Q: 5.0
+    E: 8.0
+  combat_timeout_s: 10.0
+  loot_timeout_s: 3.0
+
+exploration:
+  movement_pulse_s: 0.15
+  max_movement_pulse_s: 0.3
+  stuck_timeout_s: 1.5
+
+recording:
+  enabled: true
+  overlay: true
+  frame_interval_s: 1.0
