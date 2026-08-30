@@ -1,0 +1,199 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import cast
+
+import cv2
+import numpy as np
+from numpy.typing import NDArray
+
+from hero_siege_bot.capture import CapturedFrame
+from hero_siege_bot.config import CalibrationConfig
+from hero_siege_bot.domain import Rect
+
+
+@dataclass(frozen=True)
+class AnchorRegion:
+    anchor: str
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
+class Calibration:
+    regions: Mapping[str, Rect]
+    scale: float
+    confidence: float
+
+
+@dataclass(frozen=True)
+class _Match:
+    rect: Rect
+    scale: float
+    confidence: float
+
+
+class AutoCalibrator:
+    def __init__(
+        self,
+        config: CalibrationConfig,
+        anchors: Mapping[str, NDArray[np.uint8]],
+        regions: Mapping[str, AnchorRegion],
+    ) -> None:
+        if not anchors:
+            raise ValueError("at least one anchor is required")
+        unknown_anchors = {
+            region.anchor for region in regions.values() if region.anchor not in anchors
+        }
+        if unknown_anchors:
+            names = ", ".join(sorted(unknown_anchors))
+            raise ValueError(f"regions refer to unknown anchors: {names}")
+
+        self._config = config
+        self._anchors = {
+            name: self._grayscale(template) for name, template in anchors.items()
+        }
+        self._regions = dict(regions)
+
+    @staticmethod
+    def _grayscale(image: NDArray[np.uint8]) -> NDArray[np.uint8]:
+        if image.ndim == 2:
+            return image
+        if image.ndim == 3 and image.shape[2] == 3:
+            return cast(
+                NDArray[np.uint8], cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            )
+        raise ValueError("anchor and frame images must be grayscale or BGR")
+
+    def _scales(self) -> list[float]:
+        count = round(
+            (self._config.max_scale - self._config.min_scale)
+            / self._config.scale_step
+        )
+        scales = [
+            self._config.min_scale + index * self._config.scale_step
+            for index in range(count + 1)
+        ]
+        if not scales or scales[-1] < self._config.max_scale:
+            scales.append(self._config.max_scale)
+        return scales
+
+    def _match(
+        self, frame: NDArray[np.uint8], template: NDArray[np.uint8]
+    ) -> _Match | None:
+        best: _Match | None = None
+        seen_sizes: set[tuple[int, int]] = set()
+        template_height, template_width = template.shape
+
+        for candidate_scale in self._scales():
+            width = max(1, round(template_width * candidate_scale))
+            height = max(1, round(template_height * candidate_scale))
+            if (width, height) in seen_sizes:
+                continue
+            seen_sizes.add((width, height))
+            if width > frame.shape[1] or height > frame.shape[0]:
+                continue
+
+            scaled = cv2.resize(template, (width, height), interpolation=cv2.INTER_AREA)
+            scores = cv2.matchTemplate(frame, scaled, cv2.TM_CCOEFF_NORMED)
+            _, confidence, _, location = cv2.minMaxLoc(scores)
+            scale = ((width / template_width) + (height / template_height)) / 2.0
+            match = _Match(
+                rect=Rect(location[0], location[1], width, height),
+                scale=scale,
+                confidence=float(confidence),
+            )
+            if best is None or match.confidence > best.confidence:
+                best = match
+
+        if best is None or best.confidence < self._config.confidence_threshold:
+            return None
+        return best
+
+    def _detect(self, frame: CapturedFrame) -> dict[str, _Match] | None:
+        grayscale = self._grayscale(frame.image)
+        matches: dict[str, _Match] = {}
+        for name, template in self._anchors.items():
+            match = self._match(grayscale, template)
+            if match is None:
+                return None
+            matches[name] = match
+        return matches
+
+    def _stable(
+        self,
+        frames: Sequence[CapturedFrame],
+        detections: Sequence[dict[str, _Match]],
+    ) -> bool:
+        first_shape = frames[0].image.shape[:2]
+        if any(frame.image.shape[:2] != first_shape for frame in frames[1:]):
+            return False
+
+        frame_height, frame_width = first_shape
+        x_tolerance = max(2.0, frame_width * 0.005)
+        y_tolerance = max(2.0, frame_height * 0.005)
+        scale_tolerance = max(0.02, self._config.scale_step * 1.5)
+        for name in self._anchors:
+            matches = [frame_matches[name] for frame_matches in detections]
+            x_values = [match.rect.x for match in matches]
+            y_values = [match.rect.y for match in matches]
+            scale_values = [match.scale for match in matches]
+            if max(x_values) - min(x_values) > x_tolerance:
+                return False
+            if max(y_values) - min(y_values) > y_tolerance:
+                return False
+            if max(scale_values) - min(scale_values) > scale_tolerance:
+                return False
+        return True
+
+    def calibrate(self, frames: Sequence[CapturedFrame]) -> Calibration | None:
+        required = self._config.min_stable_frames
+        if len(frames) < required:
+            return None
+
+        detections = [self._detect(frame) for frame in frames]
+        for start in range(len(frames) - required + 1):
+            detected_window = detections[start : start + required]
+            if any(matches is None for matches in detected_window):
+                continue
+            stable_detections = [
+                matches for matches in detected_window if matches is not None
+            ]
+            frame_window = frames[start : start + required]
+            if not self._stable(frame_window, stable_detections):
+                continue
+            return self._build(stable_detections)
+        return None
+
+    def _build(self, detections: Sequence[dict[str, _Match]]) -> Calibration:
+        anchor_rects: dict[str, Rect] = {}
+        all_matches: list[_Match] = []
+        for name in self._anchors:
+            matches = [frame_matches[name] for frame_matches in detections]
+            all_matches.extend(matches)
+            anchor_rects[name] = Rect(
+                x=round(sum(match.rect.x for match in matches) / len(matches)),
+                y=round(sum(match.rect.y for match in matches) / len(matches)),
+                width=round(sum(match.rect.width for match in matches) / len(matches)),
+                height=round(sum(match.rect.height for match in matches) / len(matches)),
+            )
+
+        regions: dict[str, Rect] = {}
+        for name, definition in self._regions.items():
+            anchor = anchor_rects[definition.anchor]
+            regions[name] = Rect(
+                x=round(anchor.x + definition.x * anchor.width),
+                y=round(anchor.y + definition.y * anchor.height),
+                width=round(definition.width * anchor.width),
+                height=round(definition.height * anchor.height),
+            )
+
+        return Calibration(
+            regions=MappingProxyType(regions),
+            scale=sum(match.scale for match in all_matches) / len(all_matches),
+            confidence=min(match.confidence for match in all_matches),
+        )
