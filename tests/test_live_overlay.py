@@ -1,6 +1,16 @@
 import numpy as np
 
-from hero_siege_bot.live_overlay import pack_dib_bgra
+from hero_siege_bot.live_overlay import (
+    OVERLAY_CLASS_NAME,
+    is_game_focused,
+    pack_dib_bgra,
+)
+
+
+def test_game_stays_focused_when_overlay_is_foreground() -> None:
+    assert is_game_focused(10, 10, "Hero Siege")
+    assert is_game_focused(10, 99, OVERLAY_CLASS_NAME)
+    assert not is_game_focused(10, 99, "chrome")
 
 
 def test_pack_dib_bgra_is_32bit_bottom_up() -> None:

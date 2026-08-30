@@ -104,6 +104,8 @@ class WindowCapture:
         import dxcam  # type: ignore[import-not-found]
         import win32gui  # type: ignore[import-not-found, import-untyped]
 
+        from hero_siege_bot.live_overlay import is_game_focused
+
         if self._camera is None:
             self._camera = dxcam.create(output_color="BGR")
 
@@ -118,9 +120,16 @@ class WindowCapture:
         if image is None:
             return None
 
+        foreground = win32gui.GetForegroundWindow()
+        foreground_class = ""
+        if foreground:
+            try:
+                foreground_class = win32gui.GetClassName(foreground)
+            except Exception:
+                foreground_class = ""
         return CapturedFrame(
             image=np.asarray(image, dtype=np.uint8),
             client_rect=client_rect,
-            focused=win32gui.GetForegroundWindow() == self._hwnd,
+            focused=is_game_focused(self._hwnd, foreground, foreground_class),
             timestamp=time.time(),
         )

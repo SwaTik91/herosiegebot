@@ -10,6 +10,20 @@ from numpy.typing import NDArray
 from hero_siege_bot.diagnostics import CHROMA_KEY_BGR
 from hero_siege_bot.domain import Rect
 
+OVERLAY_CLASS_NAME = "HeroSiegeBotLiveOverlay"
+
+
+def is_game_focused(game_hwnd: int, foreground_hwnd: int, foreground_class: str) -> bool:
+    return foreground_hwnd == game_hwnd or foreground_class == OVERLAY_CLASS_NAME
+
+
+def chroma_colorref() -> int:
+    return (
+        CHROMA_KEY_BGR[0]
+        | (CHROMA_KEY_BGR[1] << 8)
+        | (CHROMA_KEY_BGR[2] << 16)
+    )
+
 
 def pack_dib_bgra(image: NDArray[np.uint8]) -> bytes:
     """Pack a top-down BGR frame as a bottom-up 32-bit DIB."""
@@ -56,7 +70,7 @@ class Win32LiveOverlay:
             (client_rect.width, client_rect.height),
             interpolation=cv2.INTER_NEAREST,
         )
-        self._blit(hwnd, scaled)
+        self._blit(hwnd, scaled, client_rect)
 
     def close(self) -> None:
         hwnd = self._hwnd
@@ -87,7 +101,7 @@ class Win32LiveOverlay:
         if self._class_atom is None:
             window_class = win32gui.WNDCLASS()
             window_class.lpfnWndProc = win32gui.DefWindowProc
-            window_class.lpszClassName = "HeroSiegeBotLiveOverlay"
+            window_class.lpszClassName = OVERLAY_CLASS_NAME
             window_class.hInstance = win32gui.GetModuleHandle(None)
             self._class_atom = win32gui.RegisterClass(window_class)
 
@@ -112,17 +126,9 @@ class Win32LiveOverlay:
             win32gui.GetModuleHandle(None),
             None,
         )
-        key = (
-            CHROMA_KEY_BGR[0]
-            | (CHROMA_KEY_BGR[1] << 8)
-            | (CHROMA_KEY_BGR[2] << 16)
-        )
-        win32gui.SetLayeredWindowAttributes(
-            self._hwnd, key, 0, win32con.LWA_COLORKEY
-        )
         win32gui.ShowWindow(self._hwnd, win32con.SW_SHOWNOACTIVATE)
 
-    def _blit(self, hwnd: int, image: NDArray[np.uint8]) -> None:
+    def _blit(self, hwnd: int, image: NDArray[np.uint8], client_rect: Rect) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -165,18 +171,37 @@ class Win32LiveOverlay:
             wintypes.UINT,
         ]
         gdi32.SetDIBits.restype = ctypes.c_int
-        hdc = win32gui.GetDC(hwnd)
+        class POINT(ctypes.Structure):
+            _fields_ = (("x", wintypes.LONG), ("y", wintypes.LONG))
+
+        class SIZE(ctypes.Structure):
+            _fields_ = (("cx", wintypes.LONG), ("cy", wintypes.LONG))
+
+        user32 = ctypes.windll.user32
+        user32.UpdateLayeredWindow.argtypes = [
+            wintypes.HWND,
+            wintypes.HDC,
+            ctypes.POINTER(POINT),
+            ctypes.POINTER(SIZE),
+            wintypes.HDC,
+            ctypes.POINTER(POINT),
+            wintypes.COLORREF,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        user32.UpdateLayeredWindow.restype = wintypes.BOOL
+        screen_hdc = win32gui.GetDC(0)
         src = None
         bitmap = None
         try:
-            dst = win32ui.CreateDCFromHandle(hdc)
-            src = dst.CreateCompatibleDC()
+            screen = win32ui.CreateDCFromHandle(screen_hdc)
+            src = screen.CreateCompatibleDC()
             bitmap = win32ui.CreateBitmap()
-            bitmap.CreateCompatibleBitmap(dst, width, height)
+            bitmap.CreateCompatibleBitmap(screen, width, height)
             src.SelectObject(bitmap)
             pixels = (ctypes.c_char * len(bits)).from_buffer_copy(bits)
             written = gdi32.SetDIBits(
-                hdc,
+                screen_hdc,
                 int(bitmap.GetHandle()),
                 0,
                 height,
@@ -186,13 +211,28 @@ class Win32LiveOverlay:
             )
             if written == 0:
                 raise OSError("SetDIBits failed")
-            dst.BitBlt((0, 0), (width, height), src, (0, 0), win32con.SRCCOPY)
+            dest = POINT(client_rect.x, client_rect.y)
+            size = SIZE(width, height)
+            origin = POINT(0, 0)
+            updated = user32.UpdateLayeredWindow(
+                hwnd,
+                screen_hdc,
+                ctypes.byref(dest),
+                ctypes.byref(size),
+                int(src.GetHandleOutput()),
+                ctypes.byref(origin),
+                chroma_colorref(),
+                None,
+                win32con.ULW_COLORKEY,
+            )
+            if not updated:
+                raise OSError("UpdateLayeredWindow failed")
         finally:
             if src is not None:
                 src.DeleteDC()
             if bitmap is not None:
                 win32gui.DeleteObject(bitmap.GetHandle())
-            win32gui.ReleaseDC(hwnd, hdc)
+            win32gui.ReleaseDC(0, screen_hdc)
 
 
 def create_live_overlay(*, enabled: bool) -> LiveOverlay:
