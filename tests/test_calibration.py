@@ -1,5 +1,6 @@
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -10,7 +11,8 @@ from numpy.typing import NDArray
 import hero_siege_bot.capture as capture_module
 from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator
 from hero_siege_bot.capture import CapturedFrame, WindowCapture
-from hero_siege_bot.config import CalibrationConfig
+from hero_siege_bot.cli import _load_calibrator
+from hero_siege_bot.config import CalibrationConfig, load_config
 from hero_siege_bot.domain import Rect
 
 
@@ -86,6 +88,24 @@ def test_calibrates_scaled_hud_and_minimap_regions_across_three_frames() -> None
     assert result.confidence >= 0.9
     assert _rect_iou(result.regions["minimap"], Rect(1120, 20, 120, 120)) >= 0.9
     assert _rect_iou(result.regions["health"], Rect(40, 50, 120, 10)) >= 0.9
+
+
+def test_real_anchors_calibrate_verified_fixture_regions() -> None:
+    image = cv2.imread(
+        "tests/fixtures/frames/highland_graveyard_1024x655.png",
+        cv2.IMREAD_COLOR,
+    )
+    assert image is not None
+    frames = _frames([image, image, image])
+
+    result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(frames)
+
+    assert result is not None
+    assert _rect_iou(result.regions["health"], Rect(58, 17, 102, 12)) >= 0.9
+    assert _rect_iou(result.regions["resource"], Rect(58, 34, 102, 10)) >= 0.9
+    assert _rect_iou(result.regions["minimap"], Rect(898, 0, 126, 143)) >= 0.9
+    assert result.regions["gameplay"] == Rect(0, 0, 1024, 655)
+    assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
 
 
 def test_rejects_sequence_when_one_frame_has_no_anchors() -> None:

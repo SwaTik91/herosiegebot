@@ -51,14 +51,28 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "no calibrated anchor assets are installed; add validated assets before running"
         )
 
-    # Task 8 replaces these conservative relative regions with measured annotations.
-    anchor = next(iter(anchors))
+    required = {"hud_status_right_cap", "minimap_top_left_corner"}
+    missing = required - anchors.keys()
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise RuntimeError(f"required calibrated anchors are missing: {names}")
+
     regions = {
-        "gameplay": AnchorRegion(anchor, -8.0, -4.0, 16.0, 12.0),
-        "health": AnchorRegion(anchor, 0.0, 0.0, 1.0, 0.25),
-        "resource": AnchorRegion(anchor, 0.0, 0.25, 1.0, 0.25),
-        "minimap": AnchorRegion(anchor, 0.0, 0.5, 1.0, 1.0),
-        "screen_state": AnchorRegion(anchor, -8.0, -4.0, 16.0, 12.0),
+        "health": AnchorRegion(
+            "hud_status_right_cap", -5.1, 0.15625, 5.1, 0.375
+        ),
+        "resource": AnchorRegion(
+            "hud_status_right_cap", -5.1, 0.6875, 5.1, 0.3125
+        ),
+        "minimap": AnchorRegion(
+            "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
+        ),
+        "gameplay": AnchorRegion(
+            "hud_status_right_cap", -8.0, -0.375, 51.2, 20.46875
+        ),
+        "screen_state": AnchorRegion(
+            "hud_status_right_cap", -8.0, -0.375, 51.2, 20.46875
+        ),
     }
     return AutoCalibrator(config.calibration, anchors, regions)
 

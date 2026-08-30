@@ -248,3 +248,18 @@ def test_recorded_frame_has_complete_verified_sidecar(
         "gameplay",
         "screen_state",
     }
+
+
+def test_default_marker_hsv_locates_verified_player_on_real_fixture() -> None:
+    image = cv2.imread(
+        "tests/fixtures/frames/highland_graveyard_1024x655.png",
+        cv2.IMREAD_COLOR,
+    )
+    assert image is not None
+    minimap = image[0:143, 898:1024]
+
+    player = _perception()._locate_player(minimap)
+
+    assert player is not None
+    assert player.x == pytest.approx(0.492, abs=0.01)
+    assert player.y == pytest.approx(0.421, abs=0.01)

@@ -18,3 +18,8 @@ Each sidecar YAML file must contain:
 
 Do not infer labels from a single screenshot. Add a case only after its boxes and state
 flags have been manually verified, and keep production thresholds in configuration.
+
+`highland_graveyard_1024x655` is the first user-supplied real fixture. Its decoded
+dimensions are 1024×655 (despite an initial 1024×687 description). Empty enemy and loot
+lists are intentional: those classes cannot be verified from the single still. The full
+bars, mini-map player point, and absence of death/restart UI are directly visible.

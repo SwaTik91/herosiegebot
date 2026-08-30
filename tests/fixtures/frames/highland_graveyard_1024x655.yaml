@@ -1,0 +1,17 @@
+frame_size:
+  width: 1024
+  height: 655
+hud_rectangles:
+  health: {x: 58, y: 17, width: 102, height: 12}
+  resource: {x: 58, y: 34, width: 102, height: 10}
+  minimap: {x: 898, y: 0, width: 126, height: 143}
+  gameplay: {x: 0, y: 0, width: 1024, height: 655}
+  screen_state: {x: 0, y: 0, width: 1024, height: 655}
+player_map_point: {x: 0.492, y: 0.421}
+bar_ratios:
+  health: 1.0
+  resource: 1.0
+enemy_boxes: []
+loot_boxes: []
+death: false
+restart_visible: false
