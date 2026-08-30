@@ -26,10 +26,19 @@ class AnchorRegion:
 
 
 @dataclass(frozen=True)
+class NormalizedRegion:
+    x: float
+    y: float
+    width: float
+    height: float
+
+
+@dataclass(frozen=True)
 class Calibration:
     regions: Mapping[str, Rect]
     scale: float
     confidence: float
+    method: str = "template"
 
 
 @dataclass(frozen=True)
@@ -61,6 +70,8 @@ class AutoCalibrator:
         regions: Mapping[str, AnchorRegion] | None = None,
         *,
         profiles: Sequence[CalibrationProfile] | None = None,
+        fallback_regions: Mapping[str, NormalizedRegion] | None = None,
+        fallback_confidence: float = 0.9,
     ) -> None:
         self._config = config
         if profiles is not None:
@@ -74,6 +85,12 @@ class AutoCalibrator:
         if not definitions:
             raise ValueError("at least one calibration profile is required")
         self._profiles = tuple(self._prepare_profile(profile) for profile in definitions)
+        self._fallback_regions = (
+            MappingProxyType(dict(fallback_regions))
+            if fallback_regions is not None
+            else None
+        )
+        self._fallback_confidence = fallback_confidence
 
     @classmethod
     def _prepare_profile(cls, profile: CalibrationProfile) -> _Profile:
@@ -221,7 +238,49 @@ class AutoCalibrator:
                         frame_height=frame_height,
                     )
                 )
-        return max(candidates, key=lambda candidate: candidate.confidence, default=None)
+        template = max(
+            candidates,
+            key=lambda candidate: candidate.confidence,
+            default=None,
+        )
+        if template is not None:
+            return template
+        return self._build_fallback(frames[-required:])
+
+    def _build_fallback(
+        self, frames: Sequence[CapturedFrame]
+    ) -> Calibration | None:
+        if self._fallback_regions is None or not frames:
+            return None
+        if any(not frame.focused for frame in frames):
+            return None
+        first_shape = frames[0].image.shape[:2]
+        first_client_rect = frames[0].client_rect
+        if any(frame.image.shape[:2] != first_shape for frame in frames[1:]):
+            return None
+        if any(frame.client_rect != first_client_rect for frame in frames[1:]):
+            return None
+
+        frame_height, frame_width = first_shape
+        regions = {
+            name: self._clip_to_frame(
+                Rect(
+                    x=round(region.x * frame_width),
+                    y=round(region.y * frame_height),
+                    width=round(region.width * frame_width),
+                    height=round(region.height * frame_height),
+                ),
+                frame_width,
+                frame_height,
+            )
+            for name, region in self._fallback_regions.items()
+        }
+        return Calibration(
+            regions=MappingProxyType(regions),
+            scale=1.0,
+            confidence=self._fallback_confidence,
+            method="proportional",
+        )
 
     def _build(
         self,

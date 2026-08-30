@@ -12,7 +12,12 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator, CalibrationProfile
+from hero_siege_bot.calibration import (
+    AnchorRegion,
+    AutoCalibrator,
+    CalibrationProfile,
+    NormalizedRegion,
+)
 from hero_siege_bot.capture import WindowCapture
 from hero_siege_bot.config import BotConfig, load_config
 from hero_siege_bot.controllers import CombatController, LootController, SurvivalController
@@ -156,7 +161,24 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             current_regions,
         ),
     )
-    return AutoCalibrator(config.calibration, profiles=profiles)
+    fallback_regions = {
+        "health": NormalizedRegion(
+            87 / 1600, 26 / 1024, 163 / 1600, 19 / 1024
+        ),
+        "resource": NormalizedRegion(
+            87 / 1600, 53 / 1024, 163 / 1600, 16 / 1024
+        ),
+        "minimap": NormalizedRegion(
+            1403 / 1600, 0.0, 197 / 1600, 226 / 1024
+        ),
+        "gameplay": NormalizedRegion(0.0, 0.0, 1.0, 1.0),
+        "screen_state": NormalizedRegion(0.0, 0.0, 1.0, 1.0),
+    }
+    return AutoCalibrator(
+        config.calibration,
+        profiles=profiles,
+        fallback_regions=fallback_regions,
+    )
 
 
 def _load_template(name: str) -> NDArray[np.uint8]:

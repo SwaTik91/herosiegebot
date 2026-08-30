@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
+import hero_siege_bot.calibration as calibration_module
 import hero_siege_bot.capture as capture_module
 from hero_siege_bot.calibration import (
     AnchorRegion,
@@ -30,6 +31,14 @@ def _anchor(width: int, height: int, seed: int) -> NDArray[np.uint8]:
 
 HUD_ANCHOR = _anchor(60, 30, 10)
 MINIMAP_ANCHOR = _anchor(60, 60, 20)
+BOREAL_IMAGE = Path("tests/fixtures/frames/boreal_island_1600x1024.png")
+BOREAL_REGIONS = {
+    "health": Rect(87, 26, 163, 19),
+    "resource": Rect(87, 53, 163, 16),
+    "minimap": Rect(1403, 0, 197, 226),
+    "gameplay": Rect(0, 0, 1600, 1024),
+    "screen_state": Rect(0, 0, 1600, 1024),
+}
 
 
 def _windows_1600x1024_frame(
@@ -77,6 +86,57 @@ def _frames(images: Sequence[NDArray[np.uint8]]) -> list[CapturedFrame]:
         )
         for index, image in enumerate(images)
     ]
+
+
+def _captured_frames(
+    path: Path,
+    *,
+    count: int,
+    size: tuple[int, int] | None = None,
+) -> list[CapturedFrame]:
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    assert image is not None
+    if size is not None:
+        image = cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+    height, width = image.shape[:2]
+    return [
+        CapturedFrame(
+            image=image.copy(),
+            client_rect=Rect(200, 100, width, height),
+            focused=True,
+            timestamp=float(index),
+        )
+        for index in range(count)
+    ]
+
+
+def _calibrator_with_proportional_fallback() -> AutoCalibrator:
+    fallback_regions = {
+        "health": calibration_module.NormalizedRegion(
+            87 / 1600, 26 / 1024, 163 / 1600, 19 / 1024
+        ),
+        "resource": calibration_module.NormalizedRegion(
+            87 / 1600, 53 / 1024, 163 / 1600, 16 / 1024
+        ),
+        "minimap": calibration_module.NormalizedRegion(
+            1403 / 1600, 0.0, 197 / 1600, 226 / 1024
+        ),
+        "gameplay": calibration_module.NormalizedRegion(0.0, 0.0, 1.0, 1.0),
+        "screen_state": calibration_module.NormalizedRegion(0.0, 0.0, 1.0, 1.0),
+    }
+    anchor = _anchor(20, 20, 91)
+    return AutoCalibrator(
+        CalibrationConfig(
+            confidence_threshold=0.9,
+            min_stable_frames=3,
+            min_scale=1.0,
+            max_scale=1.0,
+            scale_step=0.01,
+        ),
+        anchors={"missing": anchor},
+        regions={"health": AnchorRegion("missing", 0.0, 0.0, 1.0, 1.0)},
+        fallback_regions=fallback_regions,
+    )
 
 
 def _calibrator(min_stable_frames: int = 3) -> AutoCalibrator:
@@ -145,6 +205,124 @@ def _real_frame_variants(
     assert not np.array_equal(variants[0], variants[1])
     assert not np.array_equal(variants[1], variants[2])
     return variants
+
+
+def test_strict_profiles_do_not_calibrate_real_1600x1024_frame() -> None:
+    frames = _captured_frames(BOREAL_IMAGE, count=3)
+    calibrator = _load_calibrator(load_config(Path("config/default.yaml")))
+
+    assert all(
+        calibrator._detect(frame, profile) is None
+        for profile in calibrator._profiles
+        for frame in frames
+    )
+
+
+def test_proportional_fallback_calibrates_real_1600x1024_frame() -> None:
+    frames = _captured_frames(BOREAL_IMAGE, count=3)
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(frames)
+
+    assert result is not None
+    assert result.method == "proportional"
+    assert result.regions == BOREAL_REGIONS
+    assert result.confidence >= 0.9
+
+
+def test_proportional_fallback_scales_real_frame_to_1024x655() -> None:
+    frames = _captured_frames(BOREAL_IMAGE, count=3, size=(1024, 655))
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(frames)
+
+    assert result is not None
+    assert result.method == "proportional"
+    assert result.regions["health"] == Rect(56, 17, 104, 12)
+    assert result.regions["resource"] == Rect(56, 34, 104, 10)
+    assert result.regions["minimap"] == Rect(898, 0, 126, 145)
+    assert result.regions["minimap"].x + result.regions["minimap"].width == 1024
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_proportional_fallback_requires_three_frames(count: int) -> None:
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(_captured_frames(BOREAL_IMAGE, count=count))
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["focus", "image_shape", "client_position", "client_size"],
+)
+def test_proportional_fallback_rejects_unstable_capture_geometry(
+    change: str,
+) -> None:
+    frames = _captured_frames(BOREAL_IMAGE, count=3)
+    middle = frames[1]
+    image = middle.image
+    client_rect = middle.client_rect
+    focused = middle.focused
+    if change == "focus":
+        focused = False
+    elif change == "image_shape":
+        image = image[:-1, :]
+    elif change == "client_position":
+        client_rect = Rect(
+            client_rect.x + 1,
+            client_rect.y,
+            client_rect.width,
+            client_rect.height,
+        )
+    else:
+        client_rect = Rect(
+            client_rect.x,
+            client_rect.y,
+            client_rect.width - 1,
+            client_rect.height,
+        )
+    frames[1] = CapturedFrame(
+        image=image,
+        client_rect=client_rect,
+        focused=focused,
+        timestamp=middle.timestamp,
+    )
+
+    result = _calibrator_with_proportional_fallback().calibrate(frames)
+
+    assert result is None
+
+
+def test_strict_profile_wins_when_fallback_is_configured() -> None:
+    fallback_regions = {
+        "health": calibration_module.NormalizedRegion(0.0, 0.0, 1.0, 1.0)
+    }
+    config = CalibrationConfig(
+        confidence_threshold=0.9,
+        min_stable_frames=3,
+        min_scale=0.5,
+        max_scale=1.0,
+        scale_step=0.01,
+    )
+    calibrator = AutoCalibrator(
+        config=config,
+        anchors={"hud": HUD_ANCHOR, "minimap": MINIMAP_ANCHOR},
+        regions={
+            "health": AnchorRegion("hud", x=0.0, y=1.0, width=3.0, height=0.5),
+            "minimap": AnchorRegion(
+                "minimap", x=-2.0, y=-0.5, width=3.0, height=3.0
+            ),
+        },
+        fallback_regions=fallback_regions,
+    )
+
+    result = calibrator.calibrate(_frames([_image(), _image(), _image()]))
+
+    assert result is not None
+    assert result.method == "template"
+    assert set(result.regions) == {"health", "minimap"}
 
 
 def test_calibrates_scaled_hud_and_minimap_regions_across_three_frames() -> None:
