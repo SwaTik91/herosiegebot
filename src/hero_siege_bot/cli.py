@@ -25,7 +25,7 @@ from hero_siege_bot.input import (
     InputBackend,
     SafeInput,
     SendInputBackend,
-    WindowsF12Hotkey,
+    WindowsEmergencyHotkey,
 )
 from hero_siege_bot.perception import Perception
 from hero_siege_bot.runtime import BotRuntime, Capture
@@ -182,7 +182,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if client_rect is None:
             _abort("Hero Siege window was not found")
         backend = SendInputBackend(client_rect)
-        hotkey = WindowsF12Hotkey()
+        hotkey = WindowsEmergencyHotkey()
 
     runtime = build_runtime(config, backend, capture=capture, hotkey=hotkey)
     stop = threading.Event()

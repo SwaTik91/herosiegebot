@@ -1,5 +1,8 @@
 # v0.1.0a1 — Windows test preview
 
+> Superseded by v0.1.0a2: this historical preview used `F12`, which Windows
+> reserves for debuggers and therefore could not be registered reliably.
+
 Первый тестовый релиз vision-based фармбота Hero Siege.
 
 ## Включено

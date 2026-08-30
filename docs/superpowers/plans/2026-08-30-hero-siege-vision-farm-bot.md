@@ -16,7 +16,7 @@
 - Movement uses WASD; potions use `1` and `2`; skills use `Q` and `E`; primary attack holds the left mouse button.
 - Coordinates must be normalized from automatically detected window and HUD geometry, never hard-coded screen pixels.
 - Calibration or focus loss must release all input and pause.
-- `F12` must always release all input and stop active automation.
+- `Ctrl+Shift+F10` must always release all input and stop active automation.
 - Anti-cheat bypass and concealment are out of scope.
 
 ---
@@ -61,7 +61,7 @@ def test_default_config_uses_expected_controls() -> None:
     assert config.controls.movement == {"up": "W", "left": "A", "down": "S", "right": "D"}
     assert config.controls.skills == ("Q", "E")
     assert config.controls.potions == ("1", "2")
-    assert config.controls.emergency_stop == "F12"
+    assert config.controls.emergency_stop == "CTRL+SHIFT+F10"
 ```
 
 - [ ] **Step 3: Run tests and verify import failure**
@@ -406,11 +406,16 @@ Expected: FAIL because input and controller modules are missing.
 
 - [ ] **Step 4: Implement safe input orchestration**
 
-Track every pressed key and mouse button in `SafeInput`. Wrap execution in `try/finally` so bounded holds always release. Register a Windows `F12` hotkey that calls `emergency_stop`; keep registration behind a platform adapter.
+Track every pressed key and mouse button in `SafeInput`. Wrap execution in
+`try/finally` so bounded holds always release. Register the Windows
+`Ctrl+Shift+F10` chord with `RegisterHotKey` and have it call `emergency_stop`;
+keep registration behind a platform adapter.
 
 - [ ] **Step 5: Implement `SendInputBackend`**
 
-Use pywin32 structures or `ctypes.windll.user32.SendInput` with scan codes for WASD, `1`, `2`, `Q`, `E`, and `F12`. Convert normalized target coordinates to calibrated client coordinates before mouse movement. Do not use window messages or process hooks.
+Use pywin32 structures or `ctypes.windll.user32.SendInput` with scan codes for
+WASD, `1`, `2`, `Q`, and `E`. Convert normalized target coordinates to
+calibrated client coordinates before mouse movement. Do not use process hooks.
 
 - [ ] **Step 6: Implement combat, survival, and loot policies**
 
@@ -550,7 +555,10 @@ Expected: overlay tracks window movement, HUD regions, mini-map player marker, f
 
 - [ ] **Step 6: Run staged input smoke tests**
 
-Follow `docs/windows-smoke-test.md` to enable, in order: emergency stop, movement pulses, exploration, attack hold, skills, potions, loot, recovery, death, and restart. Confirm `F12`, focus loss, and closing the game each release all input.
+Follow `docs/windows-smoke-test.md` to enable, in order: emergency stop,
+movement pulses, exploration, attack hold, skills, potions, loot, recovery,
+death, and restart. Confirm `Ctrl+Shift+F10`, focus loss, and closing the game
+each release all input.
 
 - [ ] **Step 7: Run the 30-minute acceptance session**
 

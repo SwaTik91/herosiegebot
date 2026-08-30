@@ -9,7 +9,7 @@ controls:
     right: D
   skills: [Q, E]
   potions: ["1", "2"]
-  emergency_stop: F12
+  emergency_stop: CTRL+SHIFT+F10
 
 calibration:
   confidence_threshold: 0.9

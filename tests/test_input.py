@@ -1,6 +1,7 @@
 import importlib
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,7 +10,7 @@ from hero_siege_bot.input import (
     DryRunInputBackend,
     SafeInput,
     SendInputBackend,
-    WindowsF12Hotkey,
+    WindowsEmergencyHotkey,
 )
 
 
@@ -21,7 +22,7 @@ class HotkeyFake:
 
     def register(self, callback: object) -> None:
         if self.fail:
-            raise RuntimeError("F12 registration failed")
+            raise RuntimeError("emergency hotkey registration failed")
         self.callback = callback
 
     def unregister(self) -> None:
@@ -170,7 +171,7 @@ def test_emergency_stop_releases_input_and_rejects_actions_until_reset() -> None
 def test_hotkey_registration_failure_aborts_safe_input_construction() -> None:
     backend = DryRunInputBackend()
 
-    with pytest.raises(RuntimeError, match="F12 registration failed"):
+    with pytest.raises(RuntimeError, match="emergency hotkey registration failed"):
         SafeInput(
             backend,
             max_key_hold_s=0.2,
@@ -264,7 +265,7 @@ def test_windows_hotkey_waits_for_registration_result_and_unregisters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registered = threading.Event()
-    hotkey = WindowsF12Hotkey(registration_timeout_s=0.2)
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.2)
     monkeypatch.setattr(sys, "platform", "win32")
 
     def message_loop(callback: object) -> None:
@@ -283,7 +284,7 @@ def test_windows_hotkey_waits_for_registration_result_and_unregisters(
 def test_windows_hotkey_registration_failure_is_synchronous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hotkey = WindowsF12Hotkey(registration_timeout_s=0.2)
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.2)
     monkeypatch.setattr(sys, "platform", "win32")
 
     def message_loop(callback: object) -> None:
@@ -296,10 +297,104 @@ def test_windows_hotkey_registration_failure_is_synchronous(
         hotkey.register(lambda: None)
 
 
+def test_windows_hotkey_registers_ctrl_shift_f10_through_win32(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    quit_posted = threading.Event()
+
+    class User32:
+        def RegisterHotKey(
+            self, window: object, hotkey_id: int, modifiers: int, virtual_key: int
+        ) -> int:
+            calls.append(("register", window, hotkey_id, modifiers, virtual_key))
+            return 1
+
+        def GetMessageW(
+            self, message: object, window: object, minimum: int, maximum: int
+        ) -> int:
+            del message, window, minimum, maximum
+            quit_posted.wait(0.2)
+            return 0
+
+        def UnregisterHotKey(self, window: object, hotkey_id: int) -> int:
+            calls.append(("unregister", window, hotkey_id))
+            return 1
+
+        def PostThreadMessageW(
+            self, thread_id: int, message: int, wparam: int, lparam: int
+        ) -> int:
+            calls.append(("post", thread_id, message, wparam, lparam))
+            quit_posted.set()
+            return 1
+
+    class Kernel32:
+        def GetCurrentThreadId(self) -> int:
+            return 41
+
+    import ctypes
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(user32=User32(), kernel32=Kernel32()),
+        raising=False,
+    )
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.2)
+
+    hotkey.register(lambda: None)
+    hotkey.unregister()
+
+    assert calls == [
+        ("register", None, 0x4853, 0x4006, 0x79),
+        ("post", 41, 0x0012, 0, 0),
+        ("unregister", None, 0x4853),
+    ]
+
+
+def test_windows_hotkey_reports_immediate_get_last_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class User32:
+        def RegisterHotKey(
+            self, window: object, hotkey_id: int, modifiers: int, virtual_key: int
+        ) -> int:
+            del window, hotkey_id, modifiers, virtual_key
+            calls.append("RegisterHotKey")
+            return 0
+
+    class Kernel32:
+        def GetCurrentThreadId(self) -> int:
+            return 42
+
+        def GetLastError(self) -> int:
+            calls.append("GetLastError")
+            return 1409
+
+    import ctypes
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(user32=User32(), kernel32=Kernel32()),
+        raising=False,
+    )
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.2)
+
+    with pytest.raises(RuntimeError, match=r"Win32 error 1409"):
+        hotkey.register(lambda: None)
+
+    assert calls == ["RegisterHotKey", "GetLastError"]
+
+
 def test_windows_hotkey_registration_wait_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hotkey = WindowsF12Hotkey(registration_timeout_s=0.02)
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.02)
     monkeypatch.setattr(sys, "platform", "win32")
 
     def stalled_message_loop(callback: object) -> None:
@@ -308,7 +403,7 @@ def test_windows_hotkey_registration_wait_is_bounded(
 
     monkeypatch.setattr(hotkey, "_message_loop", stalled_message_loop)
 
-    with pytest.raises(TimeoutError, match="F12 RegisterHotKey"):
+    with pytest.raises(TimeoutError, match=r"Ctrl\+Shift\+F10 RegisterHotKey"):
         hotkey.register(lambda: None)
 
 

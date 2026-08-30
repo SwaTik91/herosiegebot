@@ -65,9 +65,9 @@ The current MVP has no per-action feature flags. Therefore isolate stages by
 choosing game states that trigger only the behavior under test, stopping the
 process between stages, and reviewing `events.jsonl` before proceeding.
 
-1. **Emergency stop:** during a movement pulse, press `F12`. Verify movement
-   immediately stops, the process fails closed on further actions, and Windows
-   key-state inspection or a text field shows no stuck `W/A/S/D`.
+1. **Emergency stop:** during a movement pulse, press `Ctrl+Shift+F10`. Verify
+   movement immediately stops, the process fails closed on further actions,
+   and Windows key-state inspection or a text field shows no stuck `W/A/S/D`.
 2. **Focus loss:** restart, allow one movement pulse, then Alt+Tab. Verify all
    input releases and no input reaches the unfocused application.
 3. **Game close:** restart, allow one movement pulse, then close Hero Siege.
@@ -89,8 +89,9 @@ process between stages, and reviewing `events.jsonl` before proceeding.
     in `dead`, restart is clicked only when the verified restart control is
     visible, and recalibration occurs before further input.
 
-At every stage, press `F12` if behavior differs from diagnostics. A failed F12,
-focus-loss, or game-close release is a stop-ship failure.
+At every stage, press `Ctrl+Shift+F10` if behavior differs from diagnostics. A
+failed emergency hotkey, focus-loss, or game-close release is a stop-ship
+failure.
 
 ## 4. Thirty-minute acceptance
 

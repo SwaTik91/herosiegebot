@@ -25,7 +25,7 @@ def test_default_config_uses_expected_controls() -> None:
     assert config.controls.movement == {"up": "W", "left": "A", "down": "S", "right": "D"}
     assert config.controls.skills == ("Q", "E")
     assert config.controls.potions == ("1", "2")
-    assert config.controls.emergency_stop == "F12"
+    assert config.controls.emergency_stop == "CTRL+SHIFT+F10"
 
 
 def test_load_config_rejects_non_positive_duration(tmp_path: Path) -> None:
@@ -59,7 +59,9 @@ def test_bot_state_values_use_lowercase_names() -> None:
         ),
         ("skills: [Q, R]", "skills"),
         ('potions: ["1", "3"]', "potions"),
-        ("emergency_stop: F11", "emergency_stop"),
+        ("emergency_stop: F12", "emergency_stop"),
+        ("emergency_stop: Ctrl+Shift+F10", "emergency_stop"),
+        ("emergency_stop: CTRL+SHIFT+F11", "emergency_stop"),
     ],
 )
 def test_load_config_rejects_changed_safety_controls(

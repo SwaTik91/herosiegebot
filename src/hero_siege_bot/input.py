@@ -228,11 +228,14 @@ class SafeInput:
             raise RuntimeError("emergency stop is active")
 
 
-class WindowsF12Hotkey:
+class WindowsEmergencyHotkey:
     _HOTKEY_ID = 0x4853
     _WM_HOTKEY = 0x0312
     _WM_QUIT = 0x0012
-    _VK_F12 = 0x7B
+    _MOD_CONTROL = 0x0002
+    _MOD_SHIFT = 0x0004
+    _MOD_NOREPEAT = 0x4000
+    _VK_F10 = 0x79
 
     def __init__(self, *, registration_timeout_s: float = 2.0) -> None:
         if registration_timeout_s <= 0.0:
@@ -241,6 +244,7 @@ class WindowsF12Hotkey:
         self._ready = threading.Event()
         self._shutdown = threading.Event()
         self._registered = False
+        self._registration_error_code: int | None = None
         self._thread: threading.Thread | None = None
         self._thread_id: int | None = None
         self._lock = threading.Lock()
@@ -250,10 +254,11 @@ class WindowsF12Hotkey:
             raise OSError("Windows hotkeys are only available on Windows")
         with self._lock:
             if self._thread is not None:
-                raise RuntimeError("F12 hotkey is already registered")
+                raise RuntimeError("Ctrl+Shift+F10 hotkey is already registered")
             self._ready.clear()
             self._shutdown.clear()
             self._registered = False
+            self._registration_error_code = None
             thread = threading.Thread(
                 target=self._message_loop,
                 args=(callback,),
@@ -264,13 +269,16 @@ class WindowsF12Hotkey:
             thread.start()
         if not self._ready.wait(self._registration_timeout_s):
             self.unregister()
-            raise TimeoutError("timed out waiting for F12 RegisterHotKey")
+            raise TimeoutError("timed out waiting for Ctrl+Shift+F10 RegisterHotKey")
         if not self._registered:
             thread.join(self._registration_timeout_s)
             with self._lock:
                 self._thread = None
                 self._thread_id = None
-            raise RuntimeError("RegisterHotKey failed for mandatory F12 emergency stop")
+            raise RuntimeError(
+                "RegisterHotKey failed for mandatory Ctrl+Shift+F10 emergency stop "
+                f"(Win32 error {self._registration_error_code})"
+            )
 
     def unregister(self) -> None:
         with self._lock:
@@ -287,14 +295,17 @@ class WindowsF12Hotkey:
             )
         thread.join(self._registration_timeout_s)
         if thread.is_alive():
-            raise RuntimeError("F12 hotkey thread did not shut down")
+            raise RuntimeError("Ctrl+Shift+F10 hotkey thread did not shut down")
         with self._lock:
             self._thread = None
             self._thread_id = None
             self._registered = False
 
-    def _report_registration(self, registered: bool) -> None:
+    def _report_registration(
+        self, registered: bool, error_code: int | None = None
+    ) -> None:
         self._registered = registered
+        self._registration_error_code = error_code
         self._ready.set()
 
     def _message_loop(self, callback: Callable[[], None]) -> None:
@@ -302,11 +313,18 @@ class WindowsF12Hotkey:
         from ctypes import wintypes
 
         user32 = cast(Any, ctypes).windll.user32
-        self._thread_id = cast(Any, ctypes).windll.kernel32.GetCurrentThreadId()
+        kernel32 = cast(Any, ctypes).windll.kernel32
+        self._thread_id = kernel32.GetCurrentThreadId()
         registered = bool(
-            user32.RegisterHotKey(None, self._HOTKEY_ID, 0, self._VK_F12)
+            user32.RegisterHotKey(
+                None,
+                self._HOTKEY_ID,
+                self._MOD_CONTROL | self._MOD_SHIFT | self._MOD_NOREPEAT,
+                self._VK_F10,
+            )
         )
-        self._report_registration(registered)
+        error_code = None if registered else int(kernel32.GetLastError())
+        self._report_registration(registered, error_code)
         if not registered:
             return
         message = wintypes.MSG()
@@ -316,7 +334,9 @@ class WindowsF12Hotkey:
                     try:
                         callback()
                     except Exception:
-                        _LOGGER.exception("F12 emergency-stop callback failed")
+                        _LOGGER.exception(
+                            "Ctrl+Shift+F10 emergency-stop callback failed"
+                        )
         finally:
             user32.UnregisterHotKey(None, self._HOTKEY_ID)
 
@@ -331,7 +351,6 @@ class SendInputBackend:
         "A": 0x1E,
         "S": 0x1F,
         "D": 0x20,
-        "F12": 0x58,
     }
     _MOUSE_DOWN_FLAGS: ClassVar[Mapping[str, int]] = {
         "left": 0x0002,

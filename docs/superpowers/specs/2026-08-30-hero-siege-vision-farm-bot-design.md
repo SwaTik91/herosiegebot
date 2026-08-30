@@ -77,7 +77,10 @@ After combat, selects nearby visible loot, approaches it, and clicks or holds th
 
 ### InputController
 
-Emits keyboard and mouse events through Windows `SendInput`. It supports short movement pulses, bounded mouse-button holds, release-all, dry-run mode, and an emergency stop on `F12`.
+Emits keyboard and mouse events through Windows `SendInput`. It supports short
+movement pulses, bounded mouse-button holds, release-all, dry-run mode, and an
+emergency stop on `Ctrl+Shift+F10`, registered with the standard Windows
+`RegisterHotKey` API.
 
 ### BotStateMachine
 

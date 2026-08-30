@@ -37,8 +37,8 @@ class ControlsConfig:
             raise ValueError("skills must use the required Q/E bindings")
         if self.potions != ("1", "2"):
             raise ValueError("potions must use the required 1/2 bindings")
-        if self.emergency_stop != "F12":
-            raise ValueError("emergency_stop must remain F12")
+        if self.emergency_stop != "CTRL+SHIFT+F10":
+            raise ValueError("emergency_stop must remain CTRL+SHIFT+F10")
 
 
 @dataclass(frozen=True)
@@ -236,7 +236,7 @@ _DEFAULTS: dict[str, object] = {
         "movement": {"up": "W", "left": "A", "down": "S", "right": "D"},
         "skills": ["Q", "E"],
         "potions": ["1", "2"],
-        "emergency_stop": "F12",
+        "emergency_stop": "CTRL+SHIFT+F10",
     },
     "calibration": {
         "confidence_threshold": 0.9,
