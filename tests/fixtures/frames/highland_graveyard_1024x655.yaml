@@ -7,11 +7,23 @@ hud_rectangles:
   minimap: {x: 898, y: 0, width: 126, height: 143}
   gameplay: {x: 0, y: 0, width: 1024, height: 655}
   screen_state: {x: 0, y: 0, width: 1024, height: 655}
-player_map_point: {x: 0.492, y: 0.421}
+player_map_point:
+  status: unknown
+  value: null
 bar_ratios:
-  health: 1.0
-  resource: 1.0
-enemy_boxes: []
-loot_boxes: []
-death: false
-restart_visible: false
+  status: verified
+  value:
+    health: 1.0
+    resource: 1.0
+enemy_boxes:
+  status: unknown
+  value: null
+loot_boxes:
+  status: unknown
+  value: null
+death:
+  status: verified
+  value: false
+restart_visible:
+  status: verified
+  value: false

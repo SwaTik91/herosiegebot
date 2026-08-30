@@ -216,7 +216,7 @@ def test_detector_thresholds_and_colors_are_configurable(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize("image_path", RECORDED_FRAMES or (None,))
-def test_recorded_frame_has_complete_verified_sidecar(
+def test_recorded_frame_has_complete_status_aware_sidecar(
     image_path: Path | None,
 ) -> None:
     if image_path is None:
@@ -248,18 +248,22 @@ def test_recorded_frame_has_complete_verified_sidecar(
         "gameplay",
         "screen_state",
     }
+    for field in (
+        "player_map_point",
+        "bar_ratios",
+        "enemy_boxes",
+        "loot_boxes",
+        "death",
+        "restart_visible",
+    ):
+        annotation = expected[field]
+        assert set(annotation) == {"status", "value"}
+        assert annotation["status"] in {"verified", "unknown"}
+        if annotation["status"] == "unknown":
+            assert annotation["value"] is None
 
-
-def test_default_marker_hsv_locates_verified_player_on_real_fixture() -> None:
-    image = cv2.imread(
-        "tests/fixtures/frames/highland_graveyard_1024x655.png",
-        cv2.IMREAD_COLOR,
-    )
-    assert image is not None
-    minimap = image[0:143, 898:1024]
-
-    player = _perception()._locate_player(minimap)
-
-    assert player is not None
-    assert player.x == pytest.approx(0.492, abs=0.01)
-    assert player.y == pytest.approx(0.421, abs=0.01)
+    assert expected["enemy_boxes"] == {"status": "unknown", "value": None}
+    assert expected["loot_boxes"] == {"status": "unknown", "value": None}
+    assert expected["player_map_point"] == {"status": "unknown", "value": None}
+    assert expected["death"] == {"status": "verified", "value": False}
+    assert expected["restart_visible"] == {"status": "verified", "value": False}

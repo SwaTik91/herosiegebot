@@ -108,6 +108,73 @@ def test_real_anchors_calibrate_verified_fixture_regions() -> None:
     assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
 
 
+@pytest.mark.parametrize(
+    ("scale", "offset_x", "offset_y", "brightness"),
+    [
+        (0.8, 31, 17, 18),
+        (1.2, 43, 29, -12),
+    ],
+)
+def test_real_anchors_localize_deterministic_offline_variants(
+    scale: float,
+    offset_x: int,
+    offset_y: int,
+    brightness: int,
+) -> None:
+    source = cv2.imread(
+        "tests/fixtures/frames/highland_graveyard_1024x655.png",
+        cv2.IMREAD_COLOR,
+    )
+    assert source is not None
+    scaled_size = (
+        round(source.shape[1] * scale),
+        round(source.shape[0] * scale),
+    )
+    scaled = cv2.resize(source, scaled_size, interpolation=cv2.INTER_LINEAR)
+    adjusted = np.clip(
+        scaled.astype(np.int16) + brightness,
+        0,
+        255,
+    ).astype(np.uint8)
+    transformed = np.zeros(
+        (
+            adjusted.shape[0] + offset_y + 11,
+            adjusted.shape[1] + offset_x + 13,
+            3,
+        ),
+        dtype=np.uint8,
+    )
+    transformed[
+        offset_y : offset_y + adjusted.shape[0],
+        offset_x : offset_x + adjusted.shape[1],
+    ] = adjusted
+
+    result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(
+        _frames([transformed, transformed, transformed])
+    )
+
+    assert result is not None
+    assert result.confidence >= 0.9
+    base_regions = {
+        "health": Rect(58, 17, 102, 12),
+        "resource": Rect(58, 34, 102, 10),
+        "minimap": Rect(898, 0, 126, 143),
+        "gameplay": Rect(0, 0, 1024, 655),
+        "screen_state": Rect(0, 0, 1024, 655),
+    }
+    for name, base in base_regions.items():
+        expected = Rect(
+            x=round(base.x * scale) + offset_x,
+            y=round(base.y * scale) + offset_y,
+            width=round(base.width * scale),
+            height=round(base.height * scale),
+        )
+        actual = result.regions[name]
+        assert abs(actual.x - expected.x) <= 2
+        assert abs(actual.y - expected.y) <= 2
+        assert _rect_iou(actual, expected) >= 0.8
+
+
 def test_rejects_sequence_when_one_frame_has_no_anchors() -> None:
     calibrator = _calibrator()
     blank = np.zeros((720, 1280, 3), dtype=np.uint8)

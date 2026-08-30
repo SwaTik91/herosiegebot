@@ -13,28 +13,27 @@ Its YAML sidecar records only manually verifiable facts:
 
 - health and resource bars are full, consistent with the visible `2414 / 2414`
   and `1081 / 1081` labels;
-- the mini-map player marker is at approximately `(0.492, 0.421)` within the
-  mini-map;
 - normal gameplay is visible, so `death` and `restart_visible` are false;
-- enemy and loot boxes are empty because a single still image cannot establish
-  those object classes reliably.
+- player-map position, enemy boxes, and loot boxes are explicitly `unknown`
+  because a single still does not independently establish those semantic
+  identities. Unknown is not treated as verified absence.
 
 Two stable, number-free crops were taken from this frame:
 
 - `hud_status_right_cap.png`: frame pixels `(160, 12, 20, 32)`;
 - `minimap_top_left_corner.png`: frame pixels `(898, 0, 24, 24)`.
 
-The default player-marker HSV range was measured from the connected component
-at mini-map pixel `(61.4, 60.3)`. The evidence-backed update extends the
-existing cyan range to lower `[80, 100, 50]`, upper `[115, 255, 255]`, and
-minimum area `12`; retaining the lower hue bound preserves known cyan-marker
-behavior. The offline test locates the real marker at `(0.492, 0.421)`. No
-enemy, loot, bar-border, fog, cooldown, or pulse setting was changed from this
-single frame: there is not enough evidence to tune those values honestly.
+No player-marker, enemy, loot, bar-border, fog, cooldown, or pulse setting was
+changed from this single frame: there is not enough semantic or temporal
+evidence to tune those values honestly.
 
 The exact fixture matches both anchors at the configured threshold and
-reconstructs the annotated HUD regions. This is fixture validation, not a claim
-of live or multi-resolution support.
+reconstructs the annotated HUD regions. Deterministic offline tests also apply
+0.8× and 1.2× resizing, translation, and positive/negative brightness offsets;
+both anchors remain above 0.9 confidence, region origins remain within two
+pixels, and region overlap remains at least 0.8 IoU. These are synthetic
+robustness checks on one source image, not claims of live multi-frame,
+multi-resolution, UI-scale, or Windows stability.
 
 ## Windows frame collection
 
@@ -80,10 +79,10 @@ location, and the client size printed in each filename.
 ## Results and known failures
 
 - Offline fixture geometry: passed at decoded size 1024×655.
-- Offline player-marker detection: passed on one frame.
+- Offline player-map semantic identity: unknown; no detector claim recorded.
 - Supported Windows resolutions: not established.
 - Measured detector confidence statistics: not established beyond exact anchor
-  matching on one source frame.
+  matching and deterministic transformations of one source frame.
 - Known evidence gaps: no validated enemy, loot, death, or restart examples;
   no UI-scale/build metadata; no temporal sequence for motion or bar changes.
 - Live dry-run, SendInput smoke tests, and 30-minute acceptance: blocked until
