@@ -1,11 +1,12 @@
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
+import yaml
 from numpy.typing import NDArray
 
 import hero_siege_bot.calibration as calibration_module
@@ -32,12 +33,10 @@ def _anchor(width: int, height: int, seed: int) -> NDArray[np.uint8]:
 HUD_ANCHOR = _anchor(60, 30, 10)
 MINIMAP_ANCHOR = _anchor(60, 60, 20)
 BOREAL_IMAGE = Path("tests/fixtures/frames/boreal_island_1600x1024.png")
+BOREAL_METADATA = yaml.safe_load(BOREAL_IMAGE.with_suffix(".yaml").read_text())
 BOREAL_REGIONS = {
-    "health": Rect(87, 26, 163, 19),
-    "resource": Rect(87, 53, 163, 16),
-    "minimap": Rect(1403, 0, 197, 226),
-    "gameplay": Rect(0, 0, 1600, 1024),
-    "screen_state": Rect(0, 0, 1600, 1024),
+    name: Rect(**rectangle)
+    for name, rectangle in BOREAL_METADATA["hud_rectangles"].items()
 }
 
 
@@ -136,6 +135,27 @@ def _calibrator_with_proportional_fallback() -> AutoCalibrator:
         anchors={"missing": anchor},
         regions={"health": AnchorRegion("missing", 0.0, 0.0, 1.0, 1.0)},
         fallback_regions=fallback_regions,
+    )
+
+
+def _calibrator_for_fallback_validation(
+    fallback_regions: Mapping[str, calibration_module.NormalizedRegion],
+    *,
+    fallback_confidence: float = 0.9,
+) -> AutoCalibrator:
+    anchor = _anchor(20, 20, 92)
+    return AutoCalibrator(
+        CalibrationConfig(
+            confidence_threshold=0.9,
+            min_stable_frames=3,
+            min_scale=1.0,
+            max_scale=1.0,
+            scale_step=0.01,
+        ),
+        anchors={"missing": anchor},
+        regions={"health": AnchorRegion("missing", 0.0, 0.0, 1.0, 1.0)},
+        fallback_regions=fallback_regions,
+        fallback_confidence=fallback_confidence,
     )
 
 
@@ -244,6 +264,134 @@ def test_proportional_fallback_scales_real_frame_to_1024x655() -> None:
     assert result.regions["minimap"].x + result.regions["minimap"].width == 1024
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("x", float("nan")),
+        ("y", float("inf")),
+        ("width", float("-inf")),
+        ("height", float("nan")),
+        ("x", -0.01),
+        ("y", 1.0),
+        ("width", 0.0),
+        ("height", -0.01),
+    ],
+)
+def test_normalized_region_rejects_non_finite_or_out_of_range_values(
+    field: str,
+    value: float,
+) -> None:
+    values = {"x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2}
+    values[field] = value
+
+    with pytest.raises(ValueError):
+        calibration_module.NormalizedRegion(**values)
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "width", "height"),
+    [
+        (0.9, 0.0, 0.2, 0.1),
+        (0.0, 0.9, 0.1, 0.2),
+    ],
+)
+def test_normalized_region_rejects_extents_beyond_frame(
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+) -> None:
+    with pytest.raises(ValueError):
+        calibration_module.NormalizedRegion(x, y, width, height)
+
+
+@pytest.mark.parametrize(
+    ("region", "expected"),
+    [
+        (Rect(120, 130, 10, 10), Rect(100, 100, 0, 0)),
+        (Rect(-20, -30, 10, 10), Rect(0, 0, 0, 0)),
+    ],
+)
+def test_clip_to_frame_clamps_origins_on_every_edge(
+    region: Rect,
+    expected: Rect,
+) -> None:
+    assert AutoCalibrator._clip_to_frame(region, 100, 100) == expected
+
+
+@pytest.mark.parametrize(
+    "region_names",
+    [
+        set(),
+        {"health", "resource", "minimap", "gameplay"},
+        {
+            "health",
+            "resource",
+            "minimap",
+            "gameplay",
+            "screen_state",
+            "extra",
+        },
+    ],
+)
+def test_fallback_requires_exactly_the_supported_region_names(
+    region_names: set[str],
+) -> None:
+    regions = {
+        name: calibration_module.NormalizedRegion(0.0, 0.0, 0.1, 0.1)
+        for name in region_names
+    }
+
+    with pytest.raises(ValueError):
+        _calibrator_for_fallback_validation(regions)
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [float("nan"), float("inf"), float("-inf"), 0.899, 1.001],
+)
+def test_fallback_confidence_requires_finite_binding_range(
+    confidence: float,
+) -> None:
+    regions = {
+        name: calibration_module.NormalizedRegion(0.0, 0.0, 0.1, 0.1)
+        for name in (
+            "health",
+            "resource",
+            "minimap",
+            "gameplay",
+            "screen_state",
+        )
+    }
+
+    with pytest.raises(ValueError):
+        _calibrator_for_fallback_validation(
+            regions,
+            fallback_confidence=confidence,
+        )
+
+
+@pytest.mark.parametrize("confidence", [0.9, 1.0])
+def test_fallback_confidence_accepts_inclusive_boundaries(
+    confidence: float,
+) -> None:
+    regions = {
+        name: calibration_module.NormalizedRegion(0.0, 0.0, 0.1, 0.1)
+        for name in (
+            "health",
+            "resource",
+            "minimap",
+            "gameplay",
+            "screen_state",
+        )
+    }
+
+    _calibrator_for_fallback_validation(
+        regions,
+        fallback_confidence=confidence,
+    )
+
+
 @pytest.mark.parametrize("count", [1, 2])
 def test_proportional_fallback_requires_three_frames(count: int) -> None:
     calibrator = _calibrator_with_proportional_fallback()
@@ -297,7 +445,14 @@ def test_proportional_fallback_rejects_unstable_capture_geometry(
 
 def test_strict_profile_wins_when_fallback_is_configured() -> None:
     fallback_regions = {
-        "health": calibration_module.NormalizedRegion(0.0, 0.0, 1.0, 1.0)
+        name: calibration_module.NormalizedRegion(0.0, 0.0, 1.0, 1.0)
+        for name in (
+            "health",
+            "resource",
+            "minimap",
+            "gameplay",
+            "screen_state",
+        )
     }
     config = CalibrationConfig(
         confidence_threshold=0.9,

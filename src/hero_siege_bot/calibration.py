@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -12,6 +13,10 @@ from numpy.typing import NDArray
 from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.config import CalibrationConfig
 from hero_siege_bot.domain import Rect
+
+_FALLBACK_REGION_NAMES = frozenset(
+    {"health", "resource", "minimap", "gameplay", "screen_state"}
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,17 @@ class NormalizedRegion:
     y: float
     width: float
     height: float
+
+    def __post_init__(self) -> None:
+        values = (self.x, self.y, self.width, self.height)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("normalized region values must be finite")
+        if not 0.0 <= self.x < 1.0 or not 0.0 <= self.y < 1.0:
+            raise ValueError("normalized region origins must be in [0.0, 1.0)")
+        if self.width <= 0.0 or self.height <= 0.0:
+            raise ValueError("normalized region extents must be positive")
+        if self.x + self.width > 1.0 or self.y + self.height > 1.0:
+            raise ValueError("normalized region must fit within the frame")
 
 
 @dataclass(frozen=True)
@@ -73,6 +89,11 @@ class AutoCalibrator:
         fallback_regions: Mapping[str, NormalizedRegion] | None = None,
         fallback_confidence: float = 0.9,
     ) -> None:
+        if (
+            not math.isfinite(fallback_confidence)
+            or not 0.9 <= fallback_confidence <= 1.0
+        ):
+            raise ValueError("fallback_confidence must be finite and between 0.9 and 1.0")
         self._config = config
         if profiles is not None:
             if anchors is not None or regions is not None:
@@ -85,6 +106,14 @@ class AutoCalibrator:
         if not definitions:
             raise ValueError("at least one calibration profile is required")
         self._profiles = tuple(self._prepare_profile(profile) for profile in definitions)
+        if (
+            fallback_regions is not None
+            and fallback_regions.keys() != _FALLBACK_REGION_NAMES
+        ):
+            raise ValueError(
+                "fallback regions must contain exactly: "
+                + ", ".join(sorted(_FALLBACK_REGION_NAMES))
+            )
         self._fallback_regions = (
             MappingProxyType(dict(fallback_regions))
             if fallback_regions is not None
@@ -330,10 +359,10 @@ class AutoCalibrator:
 
     @staticmethod
     def _clip_to_frame(region: Rect, frame_width: int, frame_height: int) -> Rect:
-        left = max(0, region.x)
-        top = max(0, region.y)
-        right = min(frame_width, region.x + region.width)
-        bottom = min(frame_height, region.y + region.height)
+        left = min(frame_width, max(0, region.x))
+        top = min(frame_height, max(0, region.y))
+        right = min(frame_width, max(0, region.x + region.width))
+        bottom = min(frame_height, max(0, region.y + region.height))
         return Rect(
             x=left,
             y=top,

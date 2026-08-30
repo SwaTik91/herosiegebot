@@ -216,6 +216,24 @@ def test_focus_loss_releases_input_and_pauses(
     assert input_spy.release_all_calls == 1
 
 
+def test_returning_focus_requires_fresh_calibration(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    capture = runtime_parts["capture"]
+    calibrator = runtime_parts["calibrator"]
+    assert isinstance(capture, CaptureFake)
+    assert isinstance(calibrator, CalibratorFake)
+    assert runtime.step() is BotState.EXPLORING
+    assert calibrator.calls == 1
+
+    capture.next_frame = frame(focused=False)
+    assert runtime.step() is BotState.PAUSED
+
+    capture.next_frame = frame(focused=True)
+    assert runtime.step() is BotState.EXPLORING
+    assert calibrator.calls == 2
+
+
 def test_runtime_reports_initial_state_and_changes_without_repeating(
     runtime_parts: dict[str, object],
 ) -> None:

@@ -162,8 +162,7 @@ class BotRuntime:
             self._last_frame_geometry = geometry
             if not captured.focused:
                 self.input.release_all()
-                if backend_changed or geometry_changed:
-                    self._invalidate_calibration()
+                self._invalidate_calibration()
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED
             if backend_changed or geometry_changed:
