@@ -249,6 +249,41 @@ class YoloBackend(Protocol):
     def predict(self, image: NDArray[np.uint8]) -> tuple[YoloBox, ...]: ...
 
 
+def _rect_intersection(left: Rect, right: Rect) -> int:
+    width = min(left.x + left.width, right.x + right.width) - max(left.x, right.x)
+    height = min(left.y + left.height, right.y + right.height) - max(left.y, right.y)
+    if width <= 0 or height <= 0:
+        return 0
+    return width * height
+
+
+def _boxes_conflict(left: Rect, right: Rect) -> bool:
+    overlap = _rect_intersection(left, right)
+    if overlap == 0:
+        return False
+    smaller = min(left.width * left.height, right.width * right.height)
+    union = left.width * left.height + right.width * right.height - overlap
+    return overlap / smaller >= 0.35 or (union > 0 and overlap / union >= 0.25)
+
+
+def suppress_enemies_on_player(
+    detections: tuple[Detection, ...],
+) -> tuple[Detection, ...]:
+    players = [item for item in detections if item.kind == "player" and item.bbox is not None]
+    if not players:
+        return detections
+    kept: list[Detection] = []
+    for item in detections:
+        if (
+            item.kind == "enemy"
+            and item.bbox is not None
+            and any(_boxes_conflict(item.bbox, player.bbox) for player in players if player.bbox)
+        ):
+            continue
+        kept.append(item)
+    return tuple(kept)
+
+
 class YoloDetector:
     def __init__(
         self,
@@ -285,7 +320,7 @@ class YoloDetector:
                     bbox=Rect(x1, y1, box_width, box_height),
                 )
             )
-        return tuple(detections)
+        return suppress_enemies_on_player(tuple(detections))
 
 
 class UltralyticsYoloBackend:
