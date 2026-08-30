@@ -1355,6 +1355,23 @@ def test_runtime_pushes_live_overlay_on_calibrated_step(
     assert overlay.shown[0][1] == Rect(0, 0, 20, 20)
 
 
+def test_runtime_keeps_running_when_live_overlay_blit_fails(
+    runtime_parts: dict[str, object],
+) -> None:
+    class BrokenOverlay:
+        def show(self, image: object, client_rect: Rect) -> None:
+            del image, client_rect
+            raise AttributeError("SetBitmapBits")
+
+        def close(self) -> None:
+            return None
+
+    runtime_parts["live_overlay"] = BrokenOverlay()
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.EXPLORING
+
+
 def test_runtime_run_closes_live_overlay(
     runtime_parts: dict[str, object],
 ) -> None:

@@ -11,6 +11,15 @@ from hero_siege_bot.diagnostics import CHROMA_KEY_BGR
 from hero_siege_bot.domain import Rect
 
 
+def pack_dib_bgra(image: NDArray[np.uint8]) -> bytes:
+    """Pack a top-down BGR frame as a bottom-up 32-bit DIB."""
+    height, width = image.shape[:2]
+    bgra = np.empty((height, width, 4), dtype=np.uint8)
+    bgra[:, :, :3] = image
+    bgra[:, :, 3] = 255
+    return np.ascontiguousarray(np.flipud(bgra)).tobytes()
+
+
 class LiveOverlay(Protocol):
     def show(self, image: NDArray[np.uint8], client_rect: Rect) -> None: ...
 
@@ -47,7 +56,7 @@ class Win32LiveOverlay:
             (client_rect.width, client_rect.height),
             interpolation=cv2.INTER_NEAREST,
         )
-        self._blit(hwnd, scaled, client_rect)
+        self._blit(hwnd, scaled)
 
     def close(self) -> None:
         hwnd = self._hwnd
@@ -113,26 +122,77 @@ class Win32LiveOverlay:
         )
         win32gui.ShowWindow(self._hwnd, win32con.SW_SHOWNOACTIVATE)
 
-    def _blit(self, hwnd: int, image: NDArray[np.uint8], client_rect: Rect) -> None:
+    def _blit(self, hwnd: int, image: NDArray[np.uint8]) -> None:
+        import ctypes
+        from ctypes import wintypes
+
         import win32con  # type: ignore[import-not-found, import-untyped]
         import win32gui  # type: ignore[import-not-found, import-untyped]
         import win32ui  # type: ignore[import-not-found, import-untyped]
 
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
         height, width = image.shape[:2]
-        # Windows DIBs are BGR bottom-up.
-        pixels = np.ascontiguousarray(np.flipud(image))
+        bits = pack_dib_bgra(image)
+        header = BITMAPINFOHEADER()
+        header.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        header.biWidth = width
+        header.biHeight = height
+        header.biPlanes = 1
+        header.biBitCount = 32
+        header.biSizeImage = len(bits)
+        gdi32 = ctypes.windll.gdi32
+        gdi32.SetDIBits.argtypes = [
+            wintypes.HDC,
+            wintypes.HBITMAP,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.UINT,
+        ]
+        gdi32.SetDIBits.restype = ctypes.c_int
         hdc = win32gui.GetDC(hwnd)
-        dst = win32ui.CreateDCFromHandle(hdc)
-        src = dst.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
-        bitmap.CreateCompatibleBitmap(dst, width, height)
-        src.SelectObject(bitmap)
-        bitmap.SetBitmapBits(pixels.tobytes())
-        dst.BitBlt((0, 0), (width, height), src, (0, 0), win32con.SRCCOPY)
-        src.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hdc)
-        win32gui.DeleteObject(bitmap.GetHandle())
-        del client_rect
+        src = None
+        bitmap = None
+        try:
+            dst = win32ui.CreateDCFromHandle(hdc)
+            src = dst.CreateCompatibleDC()
+            bitmap = win32ui.CreateBitmap()
+            bitmap.CreateCompatibleBitmap(dst, width, height)
+            src.SelectObject(bitmap)
+            pixels = (ctypes.c_char * len(bits)).from_buffer_copy(bits)
+            written = gdi32.SetDIBits(
+                hdc,
+                int(bitmap.GetHandle()),
+                0,
+                height,
+                pixels,
+                ctypes.byref(header),
+                0,
+            )
+            if written == 0:
+                raise OSError("SetDIBits failed")
+            dst.BitBlt((0, 0), (width, height), src, (0, 0), win32con.SRCCOPY)
+        finally:
+            if src is not None:
+                src.DeleteDC()
+            if bitmap is not None:
+                win32gui.DeleteObject(bitmap.GetHandle())
+            win32gui.ReleaseDC(hwnd, hdc)
 
 
 def create_live_overlay(*, enabled: bool) -> LiveOverlay:
