@@ -206,6 +206,37 @@ def test_yolo_detector_drops_enemy_overlapping_player() -> None:
     ]
 
 
+def test_yolo_detector_drops_enemy_overlapping_companion() -> None:
+    backend = _FakeYoloBackend(
+        (
+            YoloBox("companion", 10, 10, 40, 40, 0.88),
+            YoloBox("enemy", 14, 12, 36, 38, 0.8),
+            YoloBox("enemy", 70, 10, 90, 30, 0.85),
+        )
+    )
+    detector = YoloDetector(backend, confidence_threshold=0.35)
+    image = np.zeros((50, 100, 3), dtype=np.uint8)
+
+    detections = detector.detect(image)
+
+    assert [(item.kind, item.bbox) for item in detections] == [
+        ("companion", Rect(10, 10, 30, 30)),
+        ("enemy", Rect(70, 10, 20, 20)),
+    ]
+
+
+def test_yolo_detector_relabels_enemy_with_blue_hp_as_companion() -> None:
+    backend = _FakeYoloBackend((YoloBox("enemy", 10, 10, 50, 40, 0.86),))
+    detector = YoloDetector(backend, confidence_threshold=0.35)
+    image = np.zeros((50, 80, 3), dtype=np.uint8)
+    image[12:16, 16:42] = (255, 160, 30)
+
+    detections = detector.detect(image)
+
+    assert [item.kind for item in detections] == ["companion"]
+    assert detections[0].bbox == Rect(10, 10, 40, 30)
+
+
 def test_yolo_detector_drops_boxes_below_confidence() -> None:
     backend = _FakeYoloBackend((YoloBox("enemy", 0, 0, 8, 8, 0.2),))
     detector = YoloDetector(backend, confidence_threshold=0.35)

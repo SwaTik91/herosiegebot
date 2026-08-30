@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -266,22 +266,55 @@ def _boxes_conflict(left: Rect, right: Rect) -> bool:
     return overlap / smaller >= 0.35 or (union > 0 and overlap / union >= 0.25)
 
 
-def suppress_enemies_on_player(
+def has_ally_hp_bar(image: NDArray[np.uint8], box: Rect) -> bool:
+    height, width = image.shape[:2]
+    left = max(0, box.x)
+    top = max(0, box.y - 8)
+    right = min(width, box.x + box.width)
+    bottom = min(height, box.y + max(16, box.height // 3))
+    if right <= left or bottom <= top:
+        return False
+    hsv = cv2.cvtColor(image[top:bottom, left:right], cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (90, 80, 80), (130, 255, 255))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((1, 5), np.uint8))
+    count, _, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+    for index in range(1, count):
+        _, _, bar_width, bar_height, area = stats[index]
+        if (
+            10 <= bar_width <= 90
+            and 2 <= bar_height <= 9
+            and 2.2 <= bar_width / max(bar_height, 1) <= 20
+            and area / (bar_width * bar_height) >= 0.4
+        ):
+            return True
+    return False
+
+
+def resolve_yolo_allies(
+    image: NDArray[np.uint8],
     detections: tuple[Detection, ...],
 ) -> tuple[Detection, ...]:
-    players = [item for item in detections if item.kind == "player" and item.bbox is not None]
-    if not players:
-        return detections
-    kept: list[Detection] = []
+    allies = [
+        item
+        for item in detections
+        if item.kind in {"player", "companion"} and item.bbox is not None
+    ]
+    resolved: list[Detection] = []
     for item in detections:
-        if (
-            item.kind == "enemy"
-            and item.bbox is not None
-            and any(_boxes_conflict(item.bbox, player.bbox) for player in players if player.bbox)
+        if item.kind != "enemy" or item.bbox is None:
+            resolved.append(item)
+            continue
+        if any(
+            _boxes_conflict(item.bbox, ally.bbox)
+            for ally in allies
+            if ally.bbox is not None
         ):
             continue
-        kept.append(item)
-    return tuple(kept)
+        if has_ally_hp_bar(image, item.bbox):
+            resolved.append(replace(item, kind="companion"))
+            continue
+        resolved.append(item)
+    return tuple(resolved)
 
 
 class YoloDetector:
@@ -320,7 +353,7 @@ class YoloDetector:
                     bbox=Rect(x1, y1, box_width, box_height),
                 )
             )
-        return suppress_enemies_on_player(tuple(detections))
+        return resolve_yolo_allies(image, tuple(detections))
 
 
 class UltralyticsYoloBackend:
