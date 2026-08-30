@@ -13,8 +13,22 @@ def _project_version(path: Path) -> str:
         return tomllib.load(project_file)["project"]["version"]
 
 
+def _package_data(path: Path) -> list[str]:
+    with path.open("rb") as project_file:
+        return tomllib.load(project_file)["tool"]["setuptools"]["package-data"][
+            "hero_siege_bot"
+        ]
+
+
 def test_package_version_is_a5() -> None:
     assert _project_version(Path("pyproject.toml")) == "0.1.0a5"
+
+
+def test_package_data_includes_only_shipped_calibration_anchors() -> None:
+    patterns = _package_data(Path("pyproject.toml"))
+
+    assert patterns == ["assets/anchors/*.png"]
+    assert not any("templates" in pattern for pattern in patterns)
 
 
 def write_config(tmp_path: Path, contents: str) -> Path:

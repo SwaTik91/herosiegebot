@@ -31,7 +31,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-hero_siege_bot = ["assets/**/*.png"]
+hero_siege_bot = ["assets/anchors/*.png"]
 
 [tool.ruff]
 line-length = 100

@@ -9,22 +9,38 @@
   identical image dimensions and client rectangles.
 - Keeps calibration pending when focus or capture geometry is unstable, so an
   unsafe fallback cannot enable input.
-- Prints changed calibration diagnostics for frame progress, template
-  rejection, unstable focus or geometry, and the selected calibration method.
-  Repeated identical messages are suppressed.
+- Prints changed calibration diagnostics for frame progress, unstable focus or
+  geometry, capture/focus/geometry invalidation, and the selected calibration
+  method. Repeated identical messages are suppressed.
 - Validates normalized fallback crops at the original 1024×655 fixture size and
   the 1600×1024 scaled fixture size.
+
+The exact reachable console order for a proportional calibration is:
+
+```text
+CALIBRATING
+calibration: waiting for 3 stable frames (1/3)
+calibration: waiting for 3 stable frames (2/3)
+calibration: calibrated with proportional geometry
+EXPLORING
+```
 
 ## Windows upgrade note
 
 Detector templates created by the tester are external user data. They are not
 included in the wheel, source distribution, or Windows test archive.
 
-Before extracting a fresh release, preserve the existing
-`src\hero_siege_bot\assets\templates\*.png` files outside the installation.
-Extract the fresh release into a new folder, re-add those PNG files under the
-same path, and rerun the editable installation. Do not remove the previous
-installation until the templates have been preserved and restored.
+Before extracting a fresh release, preserve every existing
+`src\hero_siege_bot\assets\templates\*.png` file outside the installation,
+including additional files such as `portal.png`. Extract the fresh release into
+a new folder, re-add all preserved detector templates under the same
+`assets\templates` path, and rerun the editable installation. Do not remove the
+previous installation until the templates have been preserved and restored.
+
+Do not restore customized files from `assets\anchors` into `0.1.0a5`. This
+release ships its own calibration anchors and falls back to proportional
+geometry when strict profiles do not match. Restoring stale or false anchors
+could make template-first calibration select incorrect geometry.
 
 ## Validation scope
 

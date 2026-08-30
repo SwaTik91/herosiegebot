@@ -50,11 +50,21 @@ dimensions and identical client rectangles. A focus loss or geometry change
 keeps calibration pending instead of accepting an unstable fallback.
 
 The CLI prints changed calibration diagnostics with a `calibration:` prefix.
-They report stable-frame progress, template rejection, focus or geometry
-instability, and whether calibration completed with template anchors or
-proportional geometry. Repeated identical messages are suppressed. Diagnostic
-output explains the current decision; it does not enable input or weaken any
-safety check.
+Reachable output reports stable-frame progress, focus or geometry instability,
+capture/focus/geometry invalidation, and whether calibration completed with
+template anchors or proportional geometry. Repeated identical messages are
+suppressed. Diagnostic output explains the current decision; it does not enable
+input or weaken any safety check.
+
+For example, proportional calibration can produce this exact sequence:
+
+```text
+CALIBRATING
+calibration: waiting for 3 stable frames (1/3)
+calibration: waiting for 3 stable frames (2/3)
+calibration: calibrated with proportional geometry
+EXPLORING
+```
 
 ## Windows frame collection
 
@@ -83,11 +93,17 @@ resize it once. Record Windows display scaling, in-game UI scale, game build,
 location, and the client size printed in each filename.
 
 Validated detector templates created from these captures are external user
-data. They belong in `src\hero_siege_bot\assets\templates\*.png` for an editable
-Windows install and are not distributed in release artifacts. Before
-extracting a fresh release, copy those PNG files outside the installation.
-Extract the release into a new folder, re-add the saved templates at the same
-path, and rerun `python -m pip install -e .`.
+data. Preserve every `src\hero_siege_bot\assets\templates\*.png` file, including
+additional templates such as `portal.png`; they are not distributed in release
+artifacts. Before extracting a fresh release, copy all of those PNG files
+outside the installation. Extract the release into a new folder, re-add only
+the saved detector templates at the same `assets\templates` path, and rerun
+`python -m pip install -e .`.
+
+Do not restore customized files from `assets\anchors` into `0.1.0a5`. The
+release ships its own calibration anchors and uses proportional geometry when
+strict profiles do not match. A stale or false customized anchor could instead
+make template-first calibration select incorrect geometry.
 
 ## Annotation and tuning procedure
 
