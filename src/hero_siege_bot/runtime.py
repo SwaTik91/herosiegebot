@@ -273,9 +273,11 @@ class BotRuntime:
         self._calibration_frames.append(captured)
         candidate = self.calibrator.calibrate(tuple(self._calibration_frames))
         diagnostic = getattr(self.calibrator, "last_diagnostic", None)
-        self._calibration_diagnostic = (
-            diagnostic if isinstance(diagnostic, str) else None
-        )
+        if isinstance(diagnostic, str):
+            self._calibration_diagnostic = diagnostic
+        else:
+            self._calibration_diagnostic = None
+            self._last_reported_calibration_diagnostic = None
         if (
             candidate is not None
             and candidate.confidence >= self._calibration_confidence

@@ -337,6 +337,25 @@ def test_focus_loss_reports_runtime_diagnostic_once(
     assert reported == ["window focus lost"]
 
 
+def test_focus_loss_reports_again_after_diagnosticless_recovery(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    capture.next_frame = frame(focused=False)
+    assert runtime.step() is BotState.PAUSED
+    capture.next_frame = frame(focused=True)
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(focused=False)
+    assert runtime.step() is BotState.PAUSED
+
+    assert reported == ["window focus lost", "window focus lost"]
+
+
 def test_geometry_change_reports_recalibration_diagnostic_once(
     runtime_parts: dict[str, object],
 ) -> None:
