@@ -1,0 +1,335 @@
+from __future__ import annotations
+
+import threading
+from collections import deque
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import Protocol
+
+from hero_siege_bot.calibration import Calibration
+from hero_siege_bot.capture import CapturedFrame
+from hero_siege_bot.domain import Action, BotState, MapMasks, Observation, Point
+from hero_siege_bot.state_machine import BotStateMachine
+
+
+class Capture(Protocol):
+    def grab(self) -> CapturedFrame | None: ...
+
+
+class Calibrator(Protocol):
+    def calibrate(self, frames: Sequence[CapturedFrame]) -> Calibration | None: ...
+
+
+class PerceptionEngine(Protocol):
+    def observe(
+        self, frame: CapturedFrame, calibration: Calibration
+    ) -> Observation: ...
+
+
+class Explorer(Protocol):
+    def choose_target(self, masks: MapMasks, player: Point) -> Point | None: ...
+
+    def movement_action(
+        self, player: Point, target: Point
+    ) -> tuple[Action, ...]: ...
+
+    def record_progress(self, player: Point, masks: MapMasks) -> bool: ...
+
+
+class Controller(Protocol):
+    def actions(
+        self, observation: Observation, now: float
+    ) -> tuple[Action, ...]: ...
+
+
+class Recorder(Protocol):
+    def record(
+        self,
+        observation: Observation,
+        state: BotState,
+        actions: Sequence[Action],
+    ) -> None: ...
+
+
+class InputController(Protocol):
+    def execute(self, actions: Sequence[Action]) -> None: ...
+
+    def release_all(self) -> None: ...
+
+
+class BotRuntime:
+    """Coordinates perception and bounded actions behind a fail-safe boundary."""
+
+    def __init__(
+        self,
+        *,
+        capture: Capture,
+        calibrator: Calibrator,
+        perception: PerceptionEngine,
+        explorer: Explorer,
+        combat: Controller,
+        survival: Controller,
+        loot: Controller,
+        recorder: Recorder | None,
+        input_controller: InputController,
+        calibration_confidence: float,
+        no_progress_sample_limit: int,
+        movement_pulse_s: float,
+        state_machine: BotStateMachine | None = None,
+    ) -> None:
+        if not 0.0 <= calibration_confidence <= 1.0:
+            raise ValueError("calibration_confidence must be between 0.0 and 1.0")
+        if no_progress_sample_limit <= 0:
+            raise ValueError("no_progress_sample_limit must be positive")
+        if movement_pulse_s <= 0.0:
+            raise ValueError("movement_pulse_s must be positive")
+        self.capture = capture
+        self.calibrator = calibrator
+        self.perception = perception
+        self.explorer = explorer
+        self.combat = combat
+        self.survival = survival
+        self.loot = loot
+        self.recorder = recorder
+        self.input = input_controller
+        self._machine = state_machine or BotStateMachine(
+            calibration_confidence=calibration_confidence
+        )
+        self._calibration_confidence = calibration_confidence
+        self._no_progress_sample_limit = no_progress_sample_limit
+        self._movement_pulse_s = movement_pulse_s
+        self._calibration: Calibration | None = None
+        self._calibration_frames: deque[CapturedFrame] = deque(maxlen=30)
+        self._target: Point | None = None
+        self._last_movement_key: str | None = None
+        self._no_progress_samples = 0
+        self._recovery_phase = 0
+
+    def step(self) -> BotState:
+        try:
+            captured = self.capture.grab()
+            if captured is None or not captured.focused:
+                self.input.release_all()
+                self._machine.state = BotState.PAUSED
+                return BotState.PAUSED
+
+            calibration = self._ensure_calibration(captured)
+            if calibration is None:
+                self.input.release_all()
+                self._machine.state = BotState.CALIBRATING
+                return BotState.CALIBRATING
+
+            observed = self.perception.observe(captured, calibration)
+            if not self._safe_observation(observed):
+                self.input.release_all()
+                self._machine.state = BotState.PAUSED
+                if self.recorder is not None:
+                    self.recorder.record(observed, BotState.PAUSED, ())
+                    self._record_frame(
+                        captured,
+                        observed,
+                        BotState.PAUSED,
+                        (),
+                        calibration,
+                    )
+                self._invalidate_calibration()
+                return BotState.PAUSED
+
+            state, actions, release = self._decide(observed)
+            if release:
+                self.input.release_all()
+            if self.recorder is not None:
+                self.recorder.record(observed, state, actions)
+                self._record_frame(captured, observed, state, actions, calibration)
+            self.input.execute(actions)
+            if state is BotState.RESTARTING:
+                self._invalidate_calibration()
+            return state
+        except BaseException as error:
+            try:
+                self.input.release_all()
+            except Exception as release_error:  # noqa: BLE001 - preserve primary failure
+                error.add_note(f"release_all also failed: {release_error!r}")
+            raise
+
+    def run(self, stop: threading.Event) -> None:
+        try:
+            while not stop.is_set():
+                self.step()
+        finally:
+            self.input.release_all()
+
+    def _ensure_calibration(self, captured: CapturedFrame) -> Calibration | None:
+        if self._calibration is not None:
+            return self._calibration
+        self._calibration_frames.append(captured)
+        candidate = self.calibrator.calibrate(tuple(self._calibration_frames))
+        if (
+            candidate is not None
+            and candidate.confidence >= self._calibration_confidence
+        ):
+            self._calibration = candidate
+            self._calibration_frames.clear()
+            self._machine.state = BotState.EXPLORING
+        return self._calibration
+
+    def _safe_observation(self, observation: Observation) -> bool:
+        geometry_available = (
+            observation.player_map_position is not None
+            and observation.map_masks is not None
+        )
+        return (
+            observation.focused
+            and observation.calibrated
+            and observation.calibration_confidence >= self._calibration_confidence
+            and (
+                geometry_available
+                or observation.dead
+                or observation.restart_visible
+            )
+        )
+
+    def _decide(
+        self, observation: Observation
+    ) -> tuple[BotState, tuple[Action, ...], bool]:
+        state_before = self._machine.state
+        state_observation = observation
+        if (
+            state_before in (BotState.CALIBRATING, BotState.PAUSED)
+            and self._calibration is not None
+        ):
+            self._machine.state = BotState.CALIBRATING
+        if self._machine.state is BotState.EXPLORING:
+            player = observation.player_map_position
+            masks = observation.map_masks
+            if player is not None and masks is not None:
+                self.explorer.record_progress(player, masks)
+        if (
+            self._machine.state is BotState.EXPLORING
+            and observation.movement_progress <= 0.0
+        ):
+            self._no_progress_samples += 1
+            if self._no_progress_samples < self._no_progress_sample_limit:
+                state_observation = replace(observation, movement_progress=1.0)
+        elif observation.movement_progress > 0.0:
+            self._no_progress_samples = 0
+
+        state = self._machine.update(state_observation)
+        if state is BotState.RECOVERING:
+            return self._recover(observation)
+        self._recovery_phase = 0
+
+        release = state in (BotState.DEAD, BotState.CALIBRATING, BotState.PAUSED)
+        actions: list[Action] = []
+        if state in (BotState.EXPLORING, BotState.COMBAT, BotState.LOOTING):
+            actions.extend(self.survival.actions(observation, observation.timestamp))
+        if state is BotState.EXPLORING:
+            actions.extend(self._exploration_actions(observation))
+        elif state is BotState.COMBAT:
+            actions.extend(self.combat.actions(observation, observation.timestamp))
+        elif state is BotState.LOOTING:
+            actions.extend(self.loot.actions(observation, observation.timestamp))
+        elif state is BotState.RESTARTING:
+            actions.extend(
+                (
+                    Action("mouse_move", target=Point(0.5, 0.5)),
+                    Action("mouse_hold", key="left", duration_s=0.05),
+                )
+            )
+        return state, tuple(actions), release
+
+    def _exploration_actions(self, observation: Observation) -> tuple[Action, ...]:
+        player = observation.player_map_position
+        masks = observation.map_masks
+        if player is None or masks is None:
+            return ()
+        if self._target is None:
+            self._target = self.explorer.choose_target(masks, player)
+        if self._target is None:
+            return ()
+        actions = self.explorer.movement_action(player, self._target)
+        movement = next(
+            (
+                action.key
+                for action in reversed(actions)
+                if action.kind == "key_hold" and action.key in {"W", "A", "S", "D"}
+            ),
+            None,
+        )
+        if movement is not None:
+            self._last_movement_key = movement
+        return actions
+
+    def _recover(
+        self, observation: Observation
+    ) -> tuple[BotState, tuple[Action, ...], bool]:
+        if observation.movement_progress > 0.0:
+            self._machine.state = BotState.EXPLORING
+            self._no_progress_samples = 0
+            self._recovery_phase = 0
+            return (
+                BotState.EXPLORING,
+                self._exploration_actions(observation),
+                False,
+            )
+        self._recovery_phase += 1
+        if self._recovery_phase == 1:
+            return BotState.RECOVERING, (), True
+        if self._recovery_phase == 2:
+            key = self._orthogonal_key(self._last_movement_key)
+            return BotState.RECOVERING, self._pulse(key), False
+        if self._recovery_phase == 3:
+            key = self._reverse_key(self._last_movement_key)
+            return BotState.RECOVERING, self._pulse(key), False
+
+        blacklist = getattr(self.explorer, "blacklist_current_target", None)
+        if callable(blacklist):
+            blacklist()
+        self._machine.state = BotState.EXPLORING
+        self._target = None
+        self._no_progress_samples = 0
+        self._recovery_phase = 0
+        return BotState.EXPLORING, (), False
+
+    def _pulse(self, key: str | None) -> tuple[Action, ...]:
+        if key is None:
+            return ()
+        return (Action("key_hold", key=key, duration_s=self._movement_pulse_s),)
+
+    @staticmethod
+    def _orthogonal_key(key: str | None) -> str | None:
+        if key is None:
+            return None
+        return {"W": "D", "D": "S", "S": "A", "A": "W"}.get(key)
+
+    @staticmethod
+    def _reverse_key(key: str | None) -> str | None:
+        if key is None:
+            return None
+        return {"W": "S", "S": "W", "A": "D", "D": "A"}.get(key)
+
+    def _record_frame(
+        self,
+        captured: CapturedFrame,
+        observation: Observation,
+        state: BotState,
+        actions: Sequence[Action],
+        calibration: Calibration,
+    ) -> None:
+        if self.recorder is None:
+            return
+        record_frame = getattr(self.recorder, "record_frame", None)
+        if callable(record_frame):
+            record_frame(
+                captured,
+                observation,
+                state,
+                actions,
+                calibration,
+                target=self._target,
+            )
+
+    def _invalidate_calibration(self) -> None:
+        self._calibration = None
+        self._calibration_frames.clear()
+        self._target = None
