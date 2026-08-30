@@ -36,6 +36,20 @@ exploration:
   movement_pulse_s: 0.15
   max_movement_pulse_s: 0.3
   stuck_timeout_s: 1.5
+  fog_hsv_lower: [0, 0, 0]
+  fog_hsv_upper: [179, 255, 45]
+  explored_hsv_lower: [0, 0, 140]
+  explored_hsv_upper: [179, 120, 255]
+  morphology_kernel_size: 3
+  morphology_iterations: 1
+  frontier_reveal_radius: 4
+  frontier_path_weight: 1.0
+  frontier_reveal_weight: 1.0
+  frontier_failure_penalty: 100.0
+  frontier_blacklist_radius: 0.08
+  progress_min_distance: 0.01
+  progress_min_reveal_pixels: 2
+  no_progress_sample_limit: 3
 
 recording:
   enabled: true

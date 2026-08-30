@@ -94,6 +94,20 @@ class ExplorationConfig:
     movement_pulse_s: float
     max_movement_pulse_s: float
     stuck_timeout_s: float
+    fog_hsv_lower: tuple[int, int, int] = (0, 0, 0)
+    fog_hsv_upper: tuple[int, int, int] = (179, 255, 45)
+    explored_hsv_lower: tuple[int, int, int] = (0, 0, 140)
+    explored_hsv_upper: tuple[int, int, int] = (179, 120, 255)
+    morphology_kernel_size: int = 3
+    morphology_iterations: int = 1
+    frontier_reveal_radius: int = 4
+    frontier_path_weight: float = 1.0
+    frontier_reveal_weight: float = 1.0
+    frontier_failure_penalty: float = 100.0
+    frontier_blacklist_radius: float = 0.08
+    progress_min_distance: float = 0.01
+    progress_min_reveal_pixels: int = 2
+    no_progress_sample_limit: int = 3
 
     def __post_init__(self) -> None:
         _positive("movement_pulse_s", self.movement_pulse_s)
@@ -101,6 +115,44 @@ class ExplorationConfig:
         _positive("stuck_timeout_s", self.stuck_timeout_s)
         if self.movement_pulse_s > self.max_movement_pulse_s:
             raise ValueError("movement_pulse_s must not exceed max_movement_pulse_s")
+        for name, hsv in (
+            ("fog_hsv_lower", self.fog_hsv_lower),
+            ("fog_hsv_upper", self.fog_hsv_upper),
+            ("explored_hsv_lower", self.explored_hsv_lower),
+            ("explored_hsv_upper", self.explored_hsv_upper),
+        ):
+            if len(hsv) != 3:
+                raise ValueError(f"{name} must contain three HSV channels")
+            limits = (179, 255, 255)
+            if any(value < 0 or value > limit for value, limit in zip(hsv, limits, strict=True)):
+                raise ValueError(f"{name} contains an out-of-range HSV channel")
+        if any(
+            low > high
+            for low, high in zip(self.fog_hsv_lower, self.fog_hsv_upper, strict=True)
+        ):
+            raise ValueError("fog_hsv_lower must not exceed fog_hsv_upper")
+        if any(
+            low > high
+            for low, high in zip(
+                self.explored_hsv_lower, self.explored_hsv_upper, strict=True
+            )
+        ):
+            raise ValueError("explored_hsv_lower must not exceed explored_hsv_upper")
+        if self.morphology_kernel_size <= 0 or self.morphology_kernel_size % 2 == 0:
+            raise ValueError("morphology_kernel_size must be a positive odd integer")
+        if self.morphology_iterations <= 0:
+            raise ValueError("morphology_iterations must be positive")
+        if self.frontier_reveal_radius <= 0:
+            raise ValueError("frontier_reveal_radius must be positive")
+        _positive("frontier_path_weight", self.frontier_path_weight)
+        _positive("frontier_reveal_weight", self.frontier_reveal_weight)
+        _positive("frontier_failure_penalty", self.frontier_failure_penalty)
+        _positive("frontier_blacklist_radius", self.frontier_blacklist_radius)
+        _positive("progress_min_distance", self.progress_min_distance)
+        if self.progress_min_reveal_pixels <= 0:
+            raise ValueError("progress_min_reveal_pixels must be positive")
+        if self.no_progress_sample_limit <= 0:
+            raise ValueError("no_progress_sample_limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -155,6 +207,20 @@ _DEFAULTS: dict[str, object] = {
         "movement_pulse_s": 0.15,
         "max_movement_pulse_s": 0.3,
         "stuck_timeout_s": 1.5,
+        "fog_hsv_lower": [0, 0, 0],
+        "fog_hsv_upper": [179, 255, 45],
+        "explored_hsv_lower": [0, 0, 140],
+        "explored_hsv_upper": [179, 120, 255],
+        "morphology_kernel_size": 3,
+        "morphology_iterations": 1,
+        "frontier_reveal_radius": 4,
+        "frontier_path_weight": 1.0,
+        "frontier_reveal_weight": 1.0,
+        "frontier_failure_penalty": 100.0,
+        "frontier_blacklist_radius": 0.08,
+        "progress_min_distance": 0.01,
+        "progress_min_reveal_pixels": 2,
+        "no_progress_sample_limit": 3,
     },
     "recording": {"enabled": True, "overlay": True, "frame_interval_s": 1.0},
 }
@@ -216,6 +282,16 @@ def _strings(value: object, name: str) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _hsv(value: object, name: str) -> tuple[int, int, int]:
+    if (
+        not isinstance(value, list)
+        or len(value) != 3
+        or not all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    ):
+        raise ValueError(f"{name} must be a list of three integers")
+    return cast(tuple[int, int, int], tuple(value))
+
+
 def load_config(path: Path) -> BotConfig:
     loaded = yaml.safe_load(path.read_text())
     if loaded is None:
@@ -267,6 +343,26 @@ def load_config(path: Path) -> BotConfig:
             movement_pulse_s=_float(exploration, "movement_pulse_s"),
             max_movement_pulse_s=_float(exploration, "max_movement_pulse_s"),
             stuck_timeout_s=_float(exploration, "stuck_timeout_s"),
+            fog_hsv_lower=_hsv(exploration["fog_hsv_lower"], "fog_hsv_lower"),
+            fog_hsv_upper=_hsv(exploration["fog_hsv_upper"], "fog_hsv_upper"),
+            explored_hsv_lower=_hsv(
+                exploration["explored_hsv_lower"], "explored_hsv_lower"
+            ),
+            explored_hsv_upper=_hsv(
+                exploration["explored_hsv_upper"], "explored_hsv_upper"
+            ),
+            morphology_kernel_size=_int(exploration, "morphology_kernel_size"),
+            morphology_iterations=_int(exploration, "morphology_iterations"),
+            frontier_reveal_radius=_int(exploration, "frontier_reveal_radius"),
+            frontier_path_weight=_float(exploration, "frontier_path_weight"),
+            frontier_reveal_weight=_float(exploration, "frontier_reveal_weight"),
+            frontier_failure_penalty=_float(exploration, "frontier_failure_penalty"),
+            frontier_blacklist_radius=_float(exploration, "frontier_blacklist_radius"),
+            progress_min_distance=_float(exploration, "progress_min_distance"),
+            progress_min_reveal_pixels=_int(
+                exploration, "progress_min_reveal_pixels"
+            ),
+            no_progress_sample_limit=_int(exploration, "no_progress_sample_limit"),
         ),
         recording=RecordingConfig(
             enabled=_bool(recording, "enabled"),
