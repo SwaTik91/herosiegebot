@@ -1329,6 +1329,9 @@ def test_compose_live_overlay_uses_chroma_key_and_draws_boxes() -> None:
 
     assert rendered[0, 0].tolist() == list(CHROMA_KEY_BGR)
     assert rendered[10, 5].tolist() != list(CHROMA_KEY_BGR)
+    first = compose_live_overlay(observed, 40, 60, tick=1)
+    second = compose_live_overlay(observed, 40, 60, tick=2)
+    assert not np.array_equal(first, second)
 
 
 class OverlaySpy:

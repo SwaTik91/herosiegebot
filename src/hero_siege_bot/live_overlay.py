@@ -54,6 +54,7 @@ class Win32LiveOverlay:
     def __init__(self) -> None:
         self._hwnd: int | None = None
         self._class_atom: int | None = None
+        self._wndproc: object | None = None
 
     def show(self, image: NDArray[np.uint8], client_rect: Rect) -> None:
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
@@ -71,6 +72,7 @@ class Win32LiveOverlay:
             interpolation=cv2.INTER_NEAREST,
         )
         self._blit(hwnd, scaled, client_rect)
+        self._pump_messages()
 
     def close(self) -> None:
         hwnd = self._hwnd
@@ -82,25 +84,34 @@ class Win32LiveOverlay:
         if win32gui.IsWindow(hwnd):
             win32gui.DestroyWindow(hwnd)
 
+    def _pump_messages(self) -> None:
+        import win32gui  # type: ignore[import-not-found, import-untyped]
+
+        win32gui.PumpWaitingMessages()
+
+    def _wnd_proc(self, hwnd: int, msg: int, wparam: int, lparam: int) -> int:
+        import win32con  # type: ignore[import-not-found, import-untyped]
+        import win32gui  # type: ignore[import-not-found, import-untyped]
+
+        if msg == win32con.WM_PAINT:
+            win32gui.BeginPaint(hwnd)
+            win32gui.EndPaint(hwnd)
+            return 0
+        if msg == win32con.WM_ERASEBKGND:
+            return 1
+        return int(win32gui.DefWindowProc(hwnd, msg, wparam, lparam))
+
     def _ensure_window(self, client_rect: Rect) -> None:
         import win32con  # type: ignore[import-not-found, import-untyped]
         import win32gui  # type: ignore[import-not-found, import-untyped]
 
         if self._hwnd is not None and win32gui.IsWindow(self._hwnd):
-            win32gui.SetWindowPos(
-                self._hwnd,
-                win32con.HWND_TOPMOST,
-                client_rect.x,
-                client_rect.y,
-                client_rect.width,
-                client_rect.height,
-                win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW,
-            )
             return
 
         if self._class_atom is None:
+            self._wndproc = self._wnd_proc
             window_class = win32gui.WNDCLASS()
-            window_class.lpfnWndProc = win32gui.DefWindowProc
+            window_class.lpfnWndProc = self._wndproc
             window_class.lpszClassName = OVERLAY_CLASS_NAME
             window_class.hInstance = win32gui.GetModuleHandle(None)
             self._class_atom = win32gui.RegisterClass(window_class)
@@ -134,7 +145,6 @@ class Win32LiveOverlay:
 
         import win32con  # type: ignore[import-not-found, import-untyped]
         import win32gui  # type: ignore[import-not-found, import-untyped]
-        import win32ui  # type: ignore[import-not-found, import-untyped]
 
         class BITMAPINFOHEADER(ctypes.Structure):
             _fields_ = [
@@ -151,33 +161,44 @@ class Win32LiveOverlay:
                 ("biClrImportant", wintypes.DWORD),
             ]
 
-        height, width = image.shape[:2]
-        bits = pack_dib_bgra(image)
-        header = BITMAPINFOHEADER()
-        header.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        header.biWidth = width
-        header.biHeight = height
-        header.biPlanes = 1
-        header.biBitCount = 32
-        header.biSizeImage = len(bits)
-        gdi32 = ctypes.windll.gdi32
-        gdi32.SetDIBits.argtypes = [
-            wintypes.HDC,
-            wintypes.HBITMAP,
-            wintypes.UINT,
-            wintypes.UINT,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            wintypes.UINT,
-        ]
-        gdi32.SetDIBits.restype = ctypes.c_int
+        class BITMAPINFO(ctypes.Structure):
+            _fields_ = [
+                ("bmiHeader", BITMAPINFOHEADER),
+                ("bmiColors", wintypes.DWORD * 3),
+            ]
+
         class POINT(ctypes.Structure):
             _fields_ = (("x", wintypes.LONG), ("y", wintypes.LONG))
 
         class SIZE(ctypes.Structure):
             _fields_ = (("cx", wintypes.LONG), ("cy", wintypes.LONG))
 
+        height, width = image.shape[:2]
+        bits = pack_dib_bgra(image)
+        info = BITMAPINFO()
+        info.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        info.bmiHeader.biWidth = width
+        info.bmiHeader.biHeight = height
+        info.bmiHeader.biPlanes = 1
+        info.bmiHeader.biBitCount = 32
+        info.bmiHeader.biSizeImage = len(bits)
+        gdi32 = ctypes.windll.gdi32
         user32 = ctypes.windll.user32
+        gdi32.CreateCompatibleDC.restype = wintypes.HDC
+        gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+        gdi32.CreateDIBSection.restype = wintypes.HBITMAP
+        gdi32.CreateDIBSection.argtypes = [
+            wintypes.HDC,
+            ctypes.c_void_p,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_void_p),
+            wintypes.HANDLE,
+            wintypes.DWORD,
+        ]
+        gdi32.SelectObject.restype = wintypes.HGDIOBJ
+        gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+        gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+        gdi32.DeleteDC.argtypes = [wintypes.HDC]
         user32.UpdateLayeredWindow.argtypes = [
             wintypes.HWND,
             wintypes.HDC,
@@ -191,47 +212,47 @@ class Win32LiveOverlay:
         ]
         user32.UpdateLayeredWindow.restype = wintypes.BOOL
         screen_hdc = win32gui.GetDC(0)
-        src = None
+        bits_ptr = ctypes.c_void_p()
+        mem_dc = None
         bitmap = None
+        old = None
         try:
-            screen = win32ui.CreateDCFromHandle(screen_hdc)
-            src = screen.CreateCompatibleDC()
-            bitmap = win32ui.CreateBitmap()
-            bitmap.CreateCompatibleBitmap(screen, width, height)
-            src.SelectObject(bitmap)
-            pixels = (ctypes.c_char * len(bits)).from_buffer_copy(bits)
-            written = gdi32.SetDIBits(
+            mem_dc = gdi32.CreateCompatibleDC(screen_hdc)
+            bitmap = gdi32.CreateDIBSection(
                 screen_hdc,
-                int(bitmap.GetHandle()),
+                ctypes.byref(info),
                 0,
-                height,
-                pixels,
-                ctypes.byref(header),
+                ctypes.byref(bits_ptr),
+                None,
                 0,
             )
-            if written == 0:
-                raise OSError("SetDIBits failed")
+            if not bitmap or not bits_ptr.value:
+                raise OSError(f"CreateDIBSection failed ({ctypes.GetLastError()})")
+            ctypes.memmove(bits_ptr, bits, len(bits))
+            old = gdi32.SelectObject(mem_dc, bitmap)
             dest = POINT(client_rect.x, client_rect.y)
             size = SIZE(width, height)
             origin = POINT(0, 0)
             updated = user32.UpdateLayeredWindow(
-                hwnd,
+                int(hwnd),
                 screen_hdc,
                 ctypes.byref(dest),
                 ctypes.byref(size),
-                int(src.GetHandleOutput()),
+                mem_dc,
                 ctypes.byref(origin),
                 chroma_colorref(),
                 None,
                 win32con.ULW_COLORKEY,
             )
             if not updated:
-                raise OSError("UpdateLayeredWindow failed")
+                raise OSError(f"UpdateLayeredWindow failed ({ctypes.GetLastError()})")
         finally:
-            if src is not None:
-                src.DeleteDC()
-            if bitmap is not None:
-                win32gui.DeleteObject(bitmap.GetHandle())
+            if mem_dc and old:
+                gdi32.SelectObject(mem_dc, old)
+            if bitmap:
+                gdi32.DeleteObject(bitmap)
+            if mem_dc:
+                gdi32.DeleteDC(mem_dc)
             win32gui.ReleaseDC(0, screen_hdc)
 
 

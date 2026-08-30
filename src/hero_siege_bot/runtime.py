@@ -152,6 +152,7 @@ class BotRuntime:
         self._last_reported_calibration_diagnostic: str | None = None
         self._live_overlay = live_overlay
         self._live_overlay_error = False
+        self._overlay_tick = 0
 
     def step(self) -> BotState:
         if self._last_reported_state is None:
@@ -559,8 +560,14 @@ class BotRuntime:
         if not callable(show):
             return
         height, width = captured.image.shape[:2]
+        self._overlay_tick += 1
         try:
-            show(compose_live_overlay(observation, height, width), captured.client_rect)
+            show(
+                compose_live_overlay(
+                    observation, height, width, tick=self._overlay_tick
+                ),
+                captured.client_rect,
+            )
         except Exception as error:
             if not self._live_overlay_error:
                 print(f"YOLO overlay blit failed: {error}", flush=True)

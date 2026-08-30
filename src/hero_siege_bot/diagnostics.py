@@ -23,13 +23,15 @@ def compose_live_overlay(
     observation: Observation,
     height: int,
     width: int,
+    *,
+    tick: int = 0,
 ) -> NDArray[np.uint8]:
     """Boxes on a chroma-key background so a click-through overlay stays transparent."""
     rendered = np.full((height, width, 3), CHROMA_KEY_BGR, dtype=np.uint8)
     painter = DiagnosticsOverlay()
     for detection in observation.yolo:
         painter._yolo_box(rendered, detection)
-    status = f"yolo {len(observation.yolo)}"
+    status = f"yolo {len(observation.yolo)} #{tick}"
     cv2.putText(
         rendered,
         status,
@@ -40,6 +42,8 @@ def compose_live_overlay(
         1,
         cv2.LINE_8,
     )
+    pulse_x = 8 + (tick % max(1, width - 12))
+    cv2.rectangle(rendered, (pulse_x, 22), (pulse_x + 3, 26), (0, 255, 0), -1)
     return rendered
 
 
