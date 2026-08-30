@@ -269,6 +269,7 @@ class BotRuntime:
         try:
             while not stop.is_set():
                 self.step()
+                stop.wait(0.05)
         finally:
             closer = getattr(self._live_overlay, "close", None)
             if callable(closer):
