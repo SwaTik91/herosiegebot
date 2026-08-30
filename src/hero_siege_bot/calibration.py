@@ -151,7 +151,7 @@ class AutoCalibrator:
         return True
 
     def calibrate(self, frames: Sequence[CapturedFrame]) -> Calibration | None:
-        required = self._config.min_stable_frames
+        required = max(3, self._config.min_stable_frames)
         if len(frames) < required:
             return None
 

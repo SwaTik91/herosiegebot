@@ -11,6 +11,32 @@ from numpy.typing import NDArray
 from hero_siege_bot.domain import Rect
 
 
+def _enable_dpi_awareness() -> None:
+    if sys.platform != "win32":
+        return
+
+    import ctypes
+
+    windows_api = ctypes.windll  # type: ignore[attr-defined]
+    try:
+        per_monitor_v2 = ctypes.c_void_p(-4)
+        if windows_api.user32.SetProcessDpiAwarenessContext(per_monitor_v2):
+            return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        windows_api.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        windows_api.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
 @dataclass(frozen=True)
 class CapturedFrame:
     image: NDArray[np.uint8]
@@ -24,6 +50,13 @@ class WindowCapture:
         self._title = title.casefold()
         self._hwnd: int | None = None
         self._camera: Any | None = None
+        self._dpi_awareness_initialized = False
+
+    def _ensure_dpi_awareness(self) -> None:
+        if self._dpi_awareness_initialized:
+            return
+        _enable_dpi_awareness()
+        self._dpi_awareness_initialized = True
 
     def _find_handle(self) -> int | None:
         if sys.platform != "win32":
@@ -43,6 +76,7 @@ class WindowCapture:
         return matches[0] if matches else None
 
     def find(self) -> Rect | None:
+        self._ensure_dpi_awareness()
         hwnd = self._find_handle()
         if hwnd is None:
             self._hwnd = None

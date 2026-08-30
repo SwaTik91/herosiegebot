@@ -1,11 +1,15 @@
+import sys
 from collections.abc import Sequence
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
+import pytest
 from numpy.typing import NDArray
 
+import hero_siege_bot.capture as capture_module
 from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator
-from hero_siege_bot.capture import CapturedFrame
+from hero_siege_bot.capture import CapturedFrame, WindowCapture
 from hero_siege_bot.config import CalibrationConfig
 from hero_siege_bot.domain import Rect
 
@@ -41,10 +45,10 @@ def _frames(images: Sequence[NDArray[np.uint8]]) -> list[CapturedFrame]:
     ]
 
 
-def _calibrator() -> AutoCalibrator:
+def _calibrator(min_stable_frames: int = 3) -> AutoCalibrator:
     config = CalibrationConfig(
         confidence_threshold=0.9,
-        min_stable_frames=3,
+        min_stable_frames=min_stable_frames,
         min_scale=0.5,
         max_scale=1.0,
         scale_step=0.01,
@@ -101,3 +105,52 @@ def test_rejects_anchors_that_disagree_across_frame_sequence() -> None:
     )
 
     assert result is None
+
+
+@pytest.mark.parametrize("configured_minimum", [1, 2])
+def test_requires_three_frames_even_when_configured_minimum_is_lower(
+    configured_minimum: int,
+) -> None:
+    calibrator = _calibrator(min_stable_frames=configured_minimum)
+
+    result = calibrator.calibrate(_frames([_image(), _image()]))
+
+    assert result is None
+
+
+def test_window_bounds_are_read_after_enabling_dpi_awareness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class User32:
+        def SetProcessDpiAwarenessContext(self, context: object) -> bool:
+            events.append("dpi")
+            return True
+
+    def enum_windows(callback: object, context: object) -> None:
+        callback(42, context)  # type: ignore[operator]
+
+    def client_to_screen(hwnd: int, point: tuple[int, int]) -> tuple[int, int]:
+        events.append("coordinates")
+        return point[0] + 100, point[1] + 200
+
+    fake_ctypes = SimpleNamespace(
+        c_void_p=lambda value: value,
+        windll=SimpleNamespace(user32=User32()),
+    )
+    fake_win32gui = SimpleNamespace(
+        EnumWindows=enum_windows,
+        IsWindowVisible=lambda hwnd: True,
+        GetWindowText=lambda hwnd: "Hero Siege",
+        GetClientRect=lambda hwnd: (0, 0, 640, 480),
+        ClientToScreen=client_to_screen,
+    )
+    monkeypatch.setattr(capture_module.sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+
+    result = WindowCapture("Hero Siege").find()
+
+    assert result == Rect(100, 200, 640, 480)
+    assert events == ["dpi", "coordinates", "coordinates"]
