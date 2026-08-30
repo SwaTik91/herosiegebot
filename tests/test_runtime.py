@@ -216,6 +216,45 @@ def test_focus_loss_releases_input_and_pauses(
     assert input_spy.release_all_calls == 1
 
 
+def test_runtime_reports_initial_state_and_changes_without_repeating(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[BotState] = []
+    calibrator = runtime_parts["calibrator"]
+    capture = runtime_parts["capture"]
+    assert isinstance(calibrator, CalibratorFake)
+    assert isinstance(capture, CaptureFake)
+    calibrator.result = None
+    runtime_parts["state_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.CALIBRATING
+    assert runtime.step() is BotState.CALIBRATING
+    calibrator.result = Calibration(
+        MappingProxyType({"gameplay": Rect(0, 0, 20, 20)}),
+        1.0,
+        0.95,
+    )
+    assert runtime.step() is BotState.EXPLORING
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(focused=False)
+    assert runtime.step() is BotState.PAUSED
+
+    assert reported == [
+        BotState.CALIBRATING,
+        BotState.EXPLORING,
+        BotState.PAUSED,
+    ]
+
+
+def test_cli_console_status_is_concise_and_uppercase(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli._print_state(BotState.CALIBRATING)
+
+    assert capsys.readouterr().out == "CALIBRATING\n"
+
+
 def test_focus_loss_precedes_simultaneous_geometry_change(
     runtime: BotRuntime, runtime_parts: dict[str, object]
 ) -> None:

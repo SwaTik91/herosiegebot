@@ -53,6 +53,23 @@ Stop with `Ctrl+C`. Save diagnostics and record detection counts/confidences.
 Do not continue to input tests if calibration drops, regions leave the client
 area, or dry-run sends input.
 
+### Calibration status troubleshooting
+
+The console prints the initial state and then only changes, so a stable state
+does not flood the terminal:
+
+- `CALIBRATING`: the runtime is waiting for one complete HUD/minimap profile to
+  remain above threshold for at least three frames. Keep the focused borderless
+  window stationary. If it persists, record the UI scale, display scale, and
+  resolution and retain three consecutive diagnostic frames.
+- `EXPLORING`: calibration and the current safety checks passed.
+- `PAUSED`: focus, capture, or safe observation geometry was lost. No input
+  should occur; restore focus and expect calibration before exploration resumes.
+
+Dry-run must remain input-free regardless of the printed state. A transition to
+`EXPLORING` validates only the installed calibration profile, not untested
+Windows resolutions or UI scales.
+
 ## 3. Staged input checks
 
 Start each stage from a safe, focused game state:

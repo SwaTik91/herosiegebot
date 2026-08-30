@@ -31,33 +31,72 @@ class Calibration:
 
 
 @dataclass(frozen=True)
+class CalibrationProfile:
+    name: str
+    anchors: Mapping[str, NDArray[np.uint8]]
+    regions: Mapping[str, AnchorRegion]
+
+
+@dataclass(frozen=True)
 class _Match:
     rect: Rect
     scale: float
     confidence: float
 
 
+@dataclass(frozen=True)
+class _Profile:
+    name: str
+    anchors: Mapping[str, NDArray[np.uint8]]
+    regions: Mapping[str, AnchorRegion]
+
+
 class AutoCalibrator:
     def __init__(
         self,
         config: CalibrationConfig,
-        anchors: Mapping[str, NDArray[np.uint8]],
-        regions: Mapping[str, AnchorRegion],
+        anchors: Mapping[str, NDArray[np.uint8]] | None = None,
+        regions: Mapping[str, AnchorRegion] | None = None,
+        *,
+        profiles: Sequence[CalibrationProfile] | None = None,
     ) -> None:
-        if not anchors:
-            raise ValueError("at least one anchor is required")
+        self._config = config
+        if profiles is not None:
+            if anchors is not None or regions is not None:
+                raise ValueError("use either profiles or anchors and regions")
+            definitions = tuple(profiles)
+        else:
+            if anchors is None or regions is None:
+                raise ValueError("anchors and regions are required")
+            definitions = (CalibrationProfile("default", anchors, regions),)
+        if not definitions:
+            raise ValueError("at least one calibration profile is required")
+        self._profiles = tuple(self._prepare_profile(profile) for profile in definitions)
+
+    @classmethod
+    def _prepare_profile(cls, profile: CalibrationProfile) -> _Profile:
+        if not profile.anchors:
+            raise ValueError(f"profile {profile.name!r} requires at least one anchor")
         unknown_anchors = {
-            region.anchor for region in regions.values() if region.anchor not in anchors
+            region.anchor
+            for region in profile.regions.values()
+            if region.anchor not in profile.anchors
         }
         if unknown_anchors:
             names = ", ".join(sorted(unknown_anchors))
-            raise ValueError(f"regions refer to unknown anchors: {names}")
-
-        self._config = config
-        self._anchors = {
-            name: self._grayscale(template) for name, template in anchors.items()
-        }
-        self._regions = dict(regions)
+            raise ValueError(
+                f"profile {profile.name!r} regions refer to unknown anchors: {names}"
+            )
+        return _Profile(
+            name=profile.name,
+            anchors=MappingProxyType(
+                {
+                    name: cls._grayscale(template)
+                    for name, template in profile.anchors.items()
+                }
+            ),
+            regions=MappingProxyType(dict(profile.regions)),
+        )
 
     @staticmethod
     def _grayscale(image: NDArray[np.uint8]) -> NDArray[np.uint8]:
@@ -114,10 +153,12 @@ class AutoCalibrator:
             return None
         return best
 
-    def _detect(self, frame: CapturedFrame) -> dict[str, _Match] | None:
+    def _detect(
+        self, frame: CapturedFrame, profile: _Profile
+    ) -> dict[str, _Match] | None:
         grayscale = self._grayscale(frame.image)
         matches: dict[str, _Match] = {}
-        for name, template in self._anchors.items():
+        for name, template in profile.anchors.items():
             match = self._match(grayscale, template)
             if match is None:
                 return None
@@ -128,6 +169,7 @@ class AutoCalibrator:
         self,
         frames: Sequence[CapturedFrame],
         detections: Sequence[dict[str, _Match]],
+        profile: _Profile,
     ) -> bool:
         first_shape = frames[0].image.shape[:2]
         if any(frame.image.shape[:2] != first_shape for frame in frames[1:]):
@@ -137,7 +179,7 @@ class AutoCalibrator:
         x_tolerance = max(2.0, frame_width * 0.005)
         y_tolerance = max(2.0, frame_height * 0.005)
         scale_tolerance = max(0.02, self._config.scale_step * 1.5)
-        for name in self._anchors:
+        for name in profile.anchors:
             matches = [frame_matches[name] for frame_matches in detections]
             x_values = [match.rect.x for match in matches]
             y_values = [match.rect.y for match in matches]
@@ -155,24 +197,30 @@ class AutoCalibrator:
         if len(frames) < required:
             return None
 
-        detections = [self._detect(frame) for frame in frames]
-        for start in range(len(frames) - required + 1):
-            detected_window = detections[start : start + required]
-            if any(matches is None for matches in detected_window):
-                continue
-            stable_detections = [
-                matches for matches in detected_window if matches is not None
-            ]
-            frame_window = frames[start : start + required]
-            if not self._stable(frame_window, stable_detections):
-                continue
-            return self._build(stable_detections)
-        return None
+        candidates: list[Calibration] = []
+        for profile in self._profiles:
+            detections = [self._detect(frame, profile) for frame in frames]
+            for start in range(len(frames) - required + 1):
+                detected_window = detections[start : start + required]
+                if any(matches is None for matches in detected_window):
+                    continue
+                stable_detections = [
+                    matches for matches in detected_window if matches is not None
+                ]
+                frame_window = frames[start : start + required]
+                if not self._stable(frame_window, stable_detections, profile):
+                    continue
+                candidates.append(self._build(stable_detections, profile))
+        return max(candidates, key=lambda candidate: candidate.confidence, default=None)
 
-    def _build(self, detections: Sequence[dict[str, _Match]]) -> Calibration:
+    def _build(
+        self,
+        detections: Sequence[dict[str, _Match]],
+        profile: _Profile,
+    ) -> Calibration:
         anchor_rects: dict[str, Rect] = {}
         all_matches: list[_Match] = []
-        for name in self._anchors:
+        for name in profile.anchors:
             matches = [frame_matches[name] for frame_matches in detections]
             all_matches.extend(matches)
             anchor_rects[name] = Rect(
@@ -183,7 +231,7 @@ class AutoCalibrator:
             )
 
         regions: dict[str, Rect] = {}
-        for name, definition in self._regions.items():
+        for name, definition in profile.regions.items():
             anchor = anchor_rects[definition.anchor]
             regions[name] = Rect(
                 x=round(anchor.x + definition.x * anchor.width),

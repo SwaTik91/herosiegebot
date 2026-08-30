@@ -12,12 +12,13 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator
+from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator, CalibrationProfile
 from hero_siege_bot.capture import WindowCapture
 from hero_siege_bot.config import BotConfig, load_config
 from hero_siege_bot.controllers import CombatController, LootController, SurvivalController
 from hero_siege_bot.detectors import ScreenStateDetector, TemplateDetector
 from hero_siege_bot.diagnostics import DiagnosticsOverlay, JsonlRecorder
+from hero_siege_bot.domain import BotState
 from hero_siege_bot.exploration import FrontierExplorer
 from hero_siege_bot.input import (
     DryRunInputBackend,
@@ -46,6 +47,10 @@ def _abort(message: str) -> NoReturn:
     raise SystemExit(message)
 
 
+def _print_state(state: BotState) -> None:
+    print(state.name, flush=True)
+
+
 def _load_calibrator(config: BotConfig) -> AutoCalibrator:
     anchor_dir = Path(__file__).with_name("assets") / "anchors"
     anchors: dict[str, NDArray[np.uint8]] = {}
@@ -58,13 +63,17 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "no calibrated anchor assets are installed; add validated assets before running"
         )
 
-    required = {"hud_status_right_cap", "minimap_top_left_corner"}
+    required = {
+        "hud_status_right_cap",
+        "hud_status_right_cap_v2",
+        "minimap_top_left_corner",
+    }
     missing = required - anchors.keys()
     if missing:
         names = ", ".join(sorted(missing))
         raise RuntimeError(f"required calibrated anchors are missing: {names}")
 
-    regions = {
+    old_regions = {
         "health": AnchorRegion(
             "hud_status_right_cap", -5.1, 0.15625, 5.1, 0.375
         ),
@@ -81,7 +90,43 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "hud_status_right_cap", -8.0, -0.375, 51.2, 20.46875
         ),
     }
-    return AutoCalibrator(config.calibration, anchors, regions)
+    current_regions = {
+        "health": AnchorRegion(
+            "hud_status_right_cap_v2", -3.48, 9 / 42, 4.08, 12 / 42
+        ),
+        "resource": AnchorRegion(
+            "hud_status_right_cap_v2", -3.48, 26 / 42, 4.08, 10 / 42
+        ),
+        "minimap": AnchorRegion(
+            "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
+        ),
+        "gameplay": AnchorRegion(
+            "hud_status_right_cap_v2", -5.8, -8 / 42, 40.96, 655 / 42
+        ),
+        "screen_state": AnchorRegion(
+            "hud_status_right_cap_v2", -5.8, -8 / 42, 40.96, 655 / 42
+        ),
+    }
+    minimap = anchors["minimap_top_left_corner"]
+    profiles = (
+        CalibrationProfile(
+            "hud-v1",
+            {
+                "hud_status_right_cap": anchors["hud_status_right_cap"],
+                "minimap_top_left_corner": minimap,
+            },
+            old_regions,
+        ),
+        CalibrationProfile(
+            "hud-v2",
+            {
+                "hud_status_right_cap_v2": anchors["hud_status_right_cap_v2"],
+                "minimap_top_left_corner": minimap,
+            },
+            current_regions,
+        ),
+    )
+    return AutoCalibrator(config.calibration, profiles=profiles)
 
 
 def _load_template(name: str) -> NDArray[np.uint8]:
@@ -160,6 +205,7 @@ def build_runtime(
         no_progress_sample_limit=config.exploration.no_progress_sample_limit,
         movement_pulse_s=config.exploration.movement_pulse_s,
         detection_confidence=config.combat.detection_confidence,
+        state_reporter=_print_state,
     )
 
 

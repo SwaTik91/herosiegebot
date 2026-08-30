@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import threading
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -101,6 +101,7 @@ class BotRuntime:
         movement_pulse_s: float,
         detection_confidence: float,
         state_machine: BotStateMachine | None = None,
+        state_reporter: Callable[[BotState], None] | None = None,
     ) -> None:
         if not 0.0 <= calibration_confidence <= 1.0:
             raise ValueError("calibration_confidence must be between 0.0 and 1.0")
@@ -135,8 +136,17 @@ class BotRuntime:
         self._recovery_phase = 0
         self._decision_step = 0
         self._combat_suppression: _CombatSuppression | None = None
+        self._state_reporter = state_reporter
+        self._last_reported_state: BotState | None = None
 
     def step(self) -> BotState:
+        state = self._step()
+        if self._state_reporter is not None and state is not self._last_reported_state:
+            self._state_reporter(state)
+            self._last_reported_state = state
+        return state
+
+    def _step(self) -> BotState:
         try:
             captured = self.capture.grab()
             if captured is None:

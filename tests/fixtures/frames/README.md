@@ -29,3 +29,9 @@ flags have been manually verified, and keep production thresholds in configurati
 dimensions are 1024×655 (despite an initial 1024×687 description). Enemy, loot, and
 player-map annotations are `unknown`: one still does not establish those semantic
 identities. The full bars and absence of death/restart UI are directly visible.
+
+`satanic_black_hole_1024x655` is the user-supplied current-UI fixture used to
+validate the HUD-v2/minimap calibration profile. Enemy, loot, player-map, death,
+and restart annotations remain `unknown`; the screenshot is not evidence for
+those semantic labels. Only the visible full bars and measured HUD/minimap
+regions are verified.

@@ -9,7 +9,11 @@ import pytest
 from numpy.typing import NDArray
 
 import hero_siege_bot.capture as capture_module
-from hero_siege_bot.calibration import AnchorRegion, AutoCalibrator
+from hero_siege_bot.calibration import (
+    AnchorRegion,
+    AutoCalibrator,
+    CalibrationProfile,
+)
 from hero_siege_bot.capture import CapturedFrame, WindowCapture
 from hero_siege_bot.cli import _load_calibrator
 from hero_siege_bot.config import CalibrationConfig, load_config
@@ -142,6 +146,60 @@ def test_real_anchors_calibrate_verified_fixture_regions() -> None:
     assert _rect_iou(result.regions["minimap"], Rect(898, 0, 126, 143)) >= 0.9
     assert result.regions["gameplay"] == Rect(0, 0, 1024, 655)
     assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
+
+
+def test_current_hud_profile_calibrates_verified_fixture_regions() -> None:
+    image = cv2.imread(
+        "tests/fixtures/frames/satanic_black_hole_1024x655.png",
+        cv2.IMREAD_COLOR,
+    )
+    assert image is not None
+    frames = _frames(_real_frame_variants(image))
+
+    result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(frames)
+
+    assert result is not None
+    assert result.confidence >= 0.9
+    assert _rect_iou(result.regions["health"], Rect(58, 17, 102, 12)) >= 0.9
+    assert _rect_iou(result.regions["resource"], Rect(58, 34, 102, 10)) >= 0.9
+    assert _rect_iou(result.regions["minimap"], Rect(898, 0, 126, 143)) >= 0.9
+    assert result.regions["gameplay"] == Rect(0, 0, 1024, 655)
+    assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
+
+
+def test_selects_highest_confidence_stable_profile() -> None:
+    strong_anchor = _anchor(30, 20, 31)
+    weak_anchor = strong_anchor.copy()
+    weak_anchor[5, 5] = 255 - weak_anchor[5, 5]
+    image = np.zeros((200, 300, 3), dtype=np.uint8)
+    image[60:80, 100:130] = strong_anchor
+    config = CalibrationConfig(
+        confidence_threshold=0.9,
+        min_stable_frames=3,
+        min_scale=1.0,
+        max_scale=1.0,
+        scale_step=0.01,
+    )
+    calibrator = AutoCalibrator(
+        config,
+        profiles=(
+            CalibrationProfile(
+                "lower-confidence",
+                {"hud": weak_anchor},
+                {"health": AnchorRegion("hud", 0.0, 0.0, 1.0, 1.0)},
+            ),
+            CalibrationProfile(
+                "highest-confidence",
+                {"hud": strong_anchor},
+                {"health": AnchorRegion("hud", 1.0, 0.0, 1.0, 1.0)},
+            ),
+        ),
+    )
+
+    result = calibrator.calibrate(_frames([image, image.copy(), image.copy()]))
+
+    assert result is not None
+    assert result.regions["health"] == Rect(130, 60, 30, 20)
 
 
 @pytest.mark.parametrize(
