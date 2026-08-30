@@ -68,6 +68,26 @@ def test_release_all_releases_every_tracked_key_and_button() -> None:
     ]
 
 
+def test_release_all_action_releases_tracked_input_in_sequence() -> None:
+    backend = DryRunInputBackend()
+    safe_input = SafeInput(backend, max_key_hold_s=0.2, max_mouse_hold_s=0.3)
+
+    safe_input.execute(
+        (
+            Action(kind="key_down", key="W"),
+            Action(kind="release_all"),
+            Action(kind="key_hold", key="Q", duration_s=0.0),
+        )
+    )
+
+    assert backend.events == [
+        ("key_down", "W"),
+        ("key_up", "W"),
+        ("key_down", "Q"),
+        ("key_up", "Q"),
+    ]
+
+
 def test_failed_releases_remain_tracked_for_retry_while_all_are_attempted() -> None:
     class FaultInjectingBackend(DryRunInputBackend):
         def __init__(self) -> None:

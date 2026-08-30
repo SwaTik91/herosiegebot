@@ -35,6 +35,8 @@ class Explorer(Protocol):
 
     def record_progress(self, player: Point, masks: MapMasks) -> bool: ...
 
+    def blacklist_current_target(self) -> None: ...
+
 
 class Controller(Protocol):
     def actions(
@@ -199,7 +201,10 @@ class BotRuntime:
             and self._calibration is not None
         ):
             self._machine.state = BotState.CALIBRATING
-        if self._machine.state is BotState.EXPLORING:
+        if (
+            self._machine.state is BotState.EXPLORING
+            and observation.movement_progress > 0.0
+        ):
             player = observation.player_map_position
             masks = observation.map_masks
             if player is not None and masks is not None:
@@ -274,7 +279,7 @@ class BotRuntime:
             )
         self._recovery_phase += 1
         if self._recovery_phase == 1:
-            return BotState.RECOVERING, (), True
+            return BotState.RECOVERING, (Action("release_all"),), False
         if self._recovery_phase == 2:
             key = self._orthogonal_key(self._last_movement_key)
             return BotState.RECOVERING, self._pulse(key), False
@@ -282,9 +287,7 @@ class BotRuntime:
             key = self._reverse_key(self._last_movement_key)
             return BotState.RECOVERING, self._pulse(key), False
 
-        blacklist = getattr(self.explorer, "blacklist_current_target", None)
-        if callable(blacklist):
-            blacklist()
+        self.explorer.blacklist_current_target()
         self._machine.state = BotState.EXPLORING
         self._target = None
         self._no_progress_samples = 0

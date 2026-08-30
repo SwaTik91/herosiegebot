@@ -73,6 +73,19 @@ def _load_template(name: str) -> NDArray[np.uint8]:
     return np.asarray(image, dtype=np.uint8)
 
 
+def _build_recorder(
+    config: BotConfig, diagnostics_root: Path
+) -> JsonlRecorder | None:
+    if not config.recording.enabled:
+        return None
+    overlay = DiagnosticsOverlay() if config.recording.overlay else None
+    return JsonlRecorder(
+        diagnostics_root,
+        frame_interval_s=config.recording.frame_interval_s,
+        overlay=overlay,
+    )
+
+
 def build_runtime(
     config: BotConfig,
     backend: InputBackend,
@@ -104,15 +117,7 @@ def build_runtime(
         loot_detector=loot_detector,
         screen_state_detector=screen_state_detector,
     )
-    recorder = (
-        JsonlRecorder(
-            diagnostics_root,
-            frame_interval_s=config.recording.frame_interval_s,
-            overlay=DiagnosticsOverlay() if config.recording.overlay else None,
-        )
-        if config.recording.enabled
-        else None
-    )
+    recorder = _build_recorder(config, diagnostics_root)
     safe_input = SafeInput(
         backend,
         max_key_hold_s=config.exploration.max_movement_pulse_s,

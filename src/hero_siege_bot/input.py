@@ -115,7 +115,9 @@ class SafeInput:
             self._stopped = False
 
     def _execute_one(self, action: Action) -> None:
-        if action.kind == "key_down":
+        if action.kind == "release_all":
+            self.release_all()
+        elif action.kind == "key_down":
             self._press_key(self._required_key(action))
         elif action.kind == "key_up":
             self._release_key(self._required_key(action))

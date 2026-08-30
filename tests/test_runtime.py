@@ -149,6 +149,9 @@ class InputSpy:
 
     def execute(self, actions: Sequence[Action]) -> None:
         self.executed.append(tuple(actions))
+        for action in actions:
+            if action.kind == "release_all":
+                self.release_all()
 
     def release_all(self) -> None:
         self.release_all_calls += 1
@@ -231,7 +234,8 @@ def test_no_progress_enters_recovery_after_three_samples(
     assert states == [BotState.EXPLORING, BotState.EXPLORING, BotState.RECOVERING]
     explorer = runtime_parts["explorer"]
     assert isinstance(explorer, ExplorerFake)
-    assert explorer.progress_calls == 3
+    assert explorer.progress_calls == 0
+    assert not explorer.blacklisted
 
 
 def test_missing_exploration_geometry_releases_input_and_pauses(
@@ -268,16 +272,76 @@ def test_recovery_releases_then_pulses_orthogonal_and_reverse(
     assert input_spy.release_all_calls == 1
     recovery_pulses = [
         actions
-        for actions in input_spy.executed[3:]
+        for actions in input_spy.executed[2:]
         if actions
     ]
     assert recovery_pulses == [
+        (Action("release_all"),),
         (Action("key_hold", key="S", duration_s=0.1),),
         (Action("key_hold", key="A", duration_s=0.1),),
     ]
     explorer = runtime_parts["explorer"]
     assert isinstance(explorer, ExplorerFake)
     assert explorer.blacklisted
+
+
+def test_recovery_progress_resumes_without_blacklisting(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    perception.observations = [
+        observation(movement_progress=0.0),
+        observation(movement_progress=0.0),
+        observation(movement_progress=0.0),
+        observation(movement_progress=0.0),
+        observation(movement_progress=0.1),
+    ]
+
+    states = [runtime.step() for _ in range(5)]
+
+    assert states[-1] is BotState.EXPLORING
+    assert not explorer.blacklisted
+
+
+def test_recovery_release_is_recorded_before_normal_execution(
+    runtime_parts: dict[str, object]
+) -> None:
+    order: list[str] = []
+
+    class OrderedRecorder(RecorderSpy):
+        def record(
+            self, observed: Observation, state: BotState, actions: Sequence[Action]
+        ) -> None:
+            order.append(f"record:{actions[0].kind if actions else 'none'}")
+            super().record(observed, state, actions)
+
+    class OrderedInput(InputSpy):
+        def execute(self, actions: Sequence[Action]) -> None:
+            order.append(f"execute:{actions[0].kind if actions else 'none'}")
+            super().execute(actions)
+
+        def release_all(self) -> None:
+            order.append("release")
+            super().release_all()
+
+    recorder = OrderedRecorder()
+    runtime_parts["recorder"] = recorder
+    runtime_parts["input_controller"] = OrderedInput()
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    assert isinstance(perception, PerceptionFake)
+    perception.observations = [observation(movement_progress=0.0)] * 3
+
+    runtime.step()
+    runtime.step()
+    order.clear()
+    runtime.step()
+
+    assert order == ["record:release_all", "execute:release_all", "release"]
+    assert recorder.records[-1][2] == (Action("release_all"),)
 
 
 def test_combat_preempts_exploration_and_combines_survival(
@@ -438,6 +502,50 @@ def test_jsonl_recorder_writes_serializable_event_and_evidence(tmp_path: Path) -
     assert cv2.imread(str(evidence[0])) is not None
 
 
+def test_jsonl_records_release_all_action_evidence(tmp_path: Path) -> None:
+    recorder = JsonlRecorder(tmp_path, frame_interval_s=0.5)
+
+    recorder.record(
+        observation(movement_progress=0.0),
+        BotState.RECOVERING,
+        (Action("release_all"),),
+    )
+
+    event = json.loads((recorder.session_dir / "events.jsonl").read_text())
+    assert event["actions"] == [
+        {
+            "kind": "release_all",
+            "key": None,
+            "target": None,
+            "duration_s": 0.0,
+        }
+    ]
+
+
+def test_explicitly_disabled_overlay_saves_unmodified_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("overlay rendered")
+
+    monkeypatch.setattr(DiagnosticsOverlay, "render", forbidden)
+    recorder = JsonlRecorder(tmp_path, frame_interval_s=0.5, overlay=None)
+    captured = frame(timestamp=1.0)
+    recorder.record_frame(
+        captured,
+        observation(),
+        BotState.EXPLORING,
+        (),
+        Calibration(MappingProxyType({"gameplay": Rect(1, 1, 10, 10)}), 1.0, 0.95),
+    )
+
+    evidence = next((recorder.session_dir / "evidence").glob("*.png"))
+    saved = cv2.imread(str(evidence))
+    assert saved is not None
+    assert np.array_equal(saved, captured.image)
+
+
 def test_overlay_draws_on_copy_without_modifying_perception_image() -> None:
     source = np.zeros((20, 20, 3), dtype=np.uint8)
     before = source.copy()
@@ -497,6 +605,31 @@ def test_cli_dry_run_never_constructs_real_input(
     assert cli.main(["dry-run", "--config", str(config_path)]) == 0
     assert len(used_backend) == 1
     assert used_backend[0].__class__.__name__ == "DryRunInputBackend"
+
+
+def test_cli_does_not_create_overlay_when_config_disables_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("recording:\n  overlay: false\n")
+    config = cli.load_config(config_path)
+    received_overlays: list[object] = []
+
+    def forbidden_overlay() -> None:
+        raise AssertionError("overlay was created")
+
+    def recorder(
+        root: Path, *, frame_interval_s: float, overlay: object
+    ) -> object:
+        del root, frame_interval_s
+        received_overlays.append(overlay)
+        return object()
+
+    monkeypatch.setattr(cli, "DiagnosticsOverlay", forbidden_overlay)
+    monkeypatch.setattr(cli, "JsonlRecorder", recorder)
+
+    assert cli._build_recorder(config, tmp_path) is not None
+    assert received_overlays == [None]
 
 
 def test_cli_run_refuses_non_windows_before_building_runtime(

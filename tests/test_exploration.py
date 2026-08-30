@@ -139,6 +139,25 @@ def test_three_no_progress_samples_exclude_current_frontier() -> None:
     assert abs(second_target.x - first_target.x) > 0.3
 
 
+def test_explicit_blacklist_excludes_current_frontier_immediately() -> None:
+    explored = np.zeros((9, 13), dtype=np.bool_)
+    explored[4, 1:12] = True
+    fog = np.zeros((9, 13), dtype=np.bool_)
+    fog[3, 1] = True
+    fog[3, 11] = True
+    player = Point(0.5, 0.5)
+    explorer = FrontierExplorer(exploration_config(frontier_blacklist_radius=0.3))
+    map_masks = masks(explored, fog)
+    first_target = explorer.choose_target(map_masks, player)
+    assert first_target is not None
+
+    explorer.blacklist_current_target()
+    second_target = explorer.choose_target(map_masks, player)
+
+    assert second_target is not None
+    assert abs(second_target.x - first_target.x) > 0.3
+
+
 def test_recent_failure_penalty_ranks_down_nearby_reachable_frontier() -> None:
     explored = np.zeros((11, 21), dtype=np.bool_)
     explored[5, 1:20] = True

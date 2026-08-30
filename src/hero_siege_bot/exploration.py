@@ -166,6 +166,12 @@ class FrontierExplorer:
             self._no_progress_samples = 0
         return False
 
+    def blacklist_current_target(self) -> None:
+        if self._current_target is not None:
+            self._failed_targets.append(self._current_target)
+            self._current_target = None
+        self._no_progress_samples = 0
+
     def movement_action(self, player: Point, target: Point) -> tuple[Action, ...]:
         """Return one or two bounded WASD actions, or none for a zero vector."""
         pulse = min(

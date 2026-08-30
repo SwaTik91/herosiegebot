@@ -15,6 +15,8 @@ from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.domain import Action, BotState, Detection, Observation, Point, Rect
 
+_DEFAULT_OVERLAY = object()
+
 
 class DiagnosticsOverlay:
     """Render decision evidence without mutating the captured frame."""
@@ -166,7 +168,7 @@ class JsonlRecorder:
         root: Path,
         *,
         frame_interval_s: float,
-        overlay: DiagnosticsOverlay | None = None,
+        overlay: DiagnosticsOverlay | None | object = _DEFAULT_OVERLAY,
         now: datetime | None = None,
     ) -> None:
         if frame_interval_s <= 0.0:
@@ -178,7 +180,11 @@ class JsonlRecorder:
         self._evidence_dir = self.session_dir / "evidence"
         self._evidence_dir.mkdir()
         self._frame_interval_s = frame_interval_s
-        self._overlay = overlay or DiagnosticsOverlay()
+        self._overlay = (
+            DiagnosticsOverlay()
+            if overlay is _DEFAULT_OVERLAY
+            else cast(DiagnosticsOverlay | None, overlay)
+        )
         self._last_frame_timestamp: float | None = None
         self._frame_number = 0
 
@@ -222,14 +228,18 @@ class JsonlRecorder:
         if previous is not None and frame.timestamp - previous < self._frame_interval_s:
             return
         self._last_frame_timestamp = frame.timestamp
-        rendered = self._overlay.render(
-            frame.image,
-            calibration,
-            observation,
-            state,
-            actions,
-            frontier=frontier,
-            target=target,
+        rendered = (
+            frame.image.copy()
+            if self._overlay is None
+            else self._overlay.render(
+                frame.image,
+                calibration,
+                observation,
+                state,
+                actions,
+                frontier=frontier,
+                target=target,
+            )
         )
         path = self._evidence_dir / f"{self._frame_number:06d}.png"
         self._frame_number += 1
