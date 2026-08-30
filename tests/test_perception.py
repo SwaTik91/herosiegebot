@@ -15,6 +15,7 @@ from hero_siege_bot.detectors import (
     TemplateDetector,
 )
 from hero_siege_bot.domain import Rect
+from hero_siege_bot.exploration import segment_minimap
 from hero_siege_bot.perception import Perception
 
 
@@ -106,9 +107,10 @@ def _perception() -> Perception:
 def test_perception_composes_calibrated_crops_into_immutable_observation() -> None:
     perception = _perception()
     perception.observe(_frame(_image(enemy_left=5, marker_left=3)), _calibration())
+    image = _image(enemy_left=35, marker_left=24)
 
     observation = perception.observe(
-        _frame(_image(enemy_left=35, marker_left=24), timestamp=13.0),
+        _frame(image, timestamp=13.0),
         _calibration(),
     )
 
@@ -126,6 +128,18 @@ def test_perception_composes_calibrated_crops_into_immutable_observation() -> No
     assert observation.dead is True
     assert observation.restart_visible is True
     assert observation.movement_progress > 0.0
+    assert observation.map_masks is not None
+    expected_masks = segment_minimap(
+        image[0:40, 120:160],
+        load_config(Path("config/default.yaml")).exploration,
+    )
+    np.testing.assert_array_equal(
+        observation.map_masks.explored, expected_masks.explored
+    )
+    np.testing.assert_array_equal(observation.map_masks.fog, expected_masks.fog)
+    np.testing.assert_array_equal(
+        observation.map_masks.walkable, expected_masks.walkable
+    )
 
 
 @pytest.mark.parametrize(
@@ -155,6 +169,7 @@ def test_perception_returns_uncalibrated_observation_for_invalid_required_crop(
     assert observation.dead is False
     assert observation.restart_visible is False
     assert observation.movement_progress == 0.0
+    assert observation.map_masks is None
 
 
 def test_perception_returns_uncalibrated_observation_for_missing_required_crop() -> None:

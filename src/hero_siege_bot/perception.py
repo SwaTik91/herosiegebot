@@ -56,7 +56,7 @@ class Perception:
 
         health_ratio, _ = self._health_reader.read_ratio(crops["health"])
         resource_ratio, _ = self._resource_reader.read_ratio(crops["resource"])
-        segment_minimap(crops["minimap"], self._config.exploration)
+        map_masks = segment_minimap(crops["minimap"], self._config.exploration)
         player = self._locate_player(crops["minimap"])
         movement_progress = self._movement_progress(player)
 
@@ -87,6 +87,7 @@ class Perception:
                 detection.kind == "restart" for detection in states
             ),
             movement_progress=movement_progress,
+            map_masks=map_masks,
         )
 
     def _locate_player(self, minimap: NDArray[np.uint8]) -> Point | None:

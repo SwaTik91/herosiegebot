@@ -1,5 +1,4 @@
 from collections import deque
-from dataclasses import dataclass
 from typing import cast
 
 import cv2
@@ -7,22 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from hero_siege_bot.config import ExplorationConfig
-from hero_siege_bot.domain import Action, Point
-
-
-@dataclass(frozen=True)
-class MapMasks:
-    explored: NDArray[np.bool_]
-    fog: NDArray[np.bool_]
-    walkable: NDArray[np.bool_]
-
-    def __post_init__(self) -> None:
-        if self.explored.shape != self.fog.shape or self.explored.shape != self.walkable.shape:
-            raise ValueError("map masks must have matching shapes")
-        if self.explored.ndim != 2:
-            raise ValueError("map masks must be two-dimensional")
-        if any(mask.dtype != np.bool_ for mask in (self.explored, self.fog, self.walkable)):
-            raise TypeError("map masks must use boolean arrays")
+from hero_siege_bot.domain import Action, MapMasks, Point
 
 
 def _clean_mask(
