@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -8,13 +9,14 @@ from numpy.typing import NDArray
 
 from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
+from hero_siege_bot.cli import _load_calibrator
 from hero_siege_bot.config import load_config
 from hero_siege_bot.detectors import (
     MotionColorDetector,
     ScreenStateDetector,
     TemplateDetector,
 )
-from hero_siege_bot.domain import Rect
+from hero_siege_bot.domain import Detection, Rect
 from hero_siege_bot.exploration import segment_minimap
 from hero_siege_bot.perception import Perception
 
@@ -192,6 +194,63 @@ def test_perception_returns_uncalibrated_observation_for_missing_required_crop()
     )
 
     assert observation.calibrated is False
+
+
+def test_scaled_calibration_feeds_perception_without_invalid_crop_pause() -> None:
+    image = np.zeros((1024, 1600, 3), dtype=np.uint8)
+    anchor_dir = Path("src/hero_siege_bot/assets/anchors")
+    hud = cv2.imread(
+        str(anchor_dir / "hud_status_right_cap_v2.png"),
+        cv2.IMREAD_COLOR,
+    )
+    minimap = cv2.imread(
+        str(anchor_dir / "minimap_top_left_corner.png"),
+        cv2.IMREAD_COLOR,
+    )
+    assert hud is not None
+    assert minimap is not None
+    image[12:79, 226:266] = cv2.resize(
+        hud,
+        (40, 67),
+        interpolation=cv2.INTER_AREA,
+    )
+    image[0:38, 1400:1438] = cv2.resize(
+        minimap,
+        (38, 38),
+        interpolation=cv2.INTER_AREA,
+    )
+    image[100:105, 1450:1455] = (255, 255, 0)
+    captured = CapturedFrame(
+        image=image,
+        client_rect=Rect(0, 0, 1600, 1024),
+        focused=True,
+        timestamp=12.5,
+    )
+    config = load_config(Path("config/default.yaml"))
+    config = replace(
+        config,
+        calibration=replace(config.calibration, max_scale=1.6),
+    )
+    calibration = _load_calibrator(config).calibrate([captured] * 5)
+    assert calibration is not None
+
+    class NoDetections:
+        def detect(self, crop: NDArray[np.uint8]) -> tuple[Detection, ...]:
+            assert crop.size > 0
+            return ()
+
+    perception = Perception(
+        config=config,
+        enemy_detector=NoDetections(),
+        loot_detector=NoDetections(),
+        screen_state_detector=NoDetections(),
+    )
+
+    observation = perception.observe(captured, calibration)
+
+    assert observation.calibrated is True
+    assert observation.player_map_position is not None
+    assert observation.map_masks is not None
 
 
 def test_detector_thresholds_and_colors_are_configurable(tmp_path: Path) -> None:

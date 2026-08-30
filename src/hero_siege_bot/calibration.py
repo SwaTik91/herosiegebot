@@ -21,6 +21,7 @@ class AnchorRegion:
     y: float
     width: float
     height: float
+    clip_to_frame: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,13 +211,24 @@ class AutoCalibrator:
                 frame_window = frames[start : start + required]
                 if not self._stable(frame_window, stable_detections, profile):
                     continue
-                candidates.append(self._build(stable_detections, profile))
+                frame_height, frame_width = frame_window[0].image.shape[:2]
+                candidates.append(
+                    self._build(
+                        stable_detections,
+                        profile,
+                        frame_width=frame_width,
+                        frame_height=frame_height,
+                    )
+                )
         return max(candidates, key=lambda candidate: candidate.confidence, default=None)
 
     def _build(
         self,
         detections: Sequence[dict[str, _Match]],
         profile: _Profile,
+        *,
+        frame_width: int,
+        frame_height: int,
     ) -> Calibration:
         anchor_rects: dict[str, Rect] = {}
         all_matches: list[_Match] = []
@@ -233,12 +245,24 @@ class AutoCalibrator:
         regions: dict[str, Rect] = {}
         for name, definition in profile.regions.items():
             anchor = anchor_rects[definition.anchor]
-            regions[name] = Rect(
+            region = Rect(
                 x=round(anchor.x + definition.x * anchor.width),
                 y=round(anchor.y + definition.y * anchor.height),
                 width=round(definition.width * anchor.width),
                 height=round(definition.height * anchor.height),
             )
+            if definition.clip_to_frame:
+                left = max(0, region.x)
+                top = max(0, region.y)
+                right = min(frame_width, region.x + region.width)
+                bottom = min(frame_height, region.y + region.height)
+                region = Rect(
+                    x=left,
+                    y=top,
+                    width=max(0, right - left),
+                    height=max(0, bottom - top),
+                )
+            regions[name] = region
 
         return Calibration(
             regions=MappingProxyType(regions),

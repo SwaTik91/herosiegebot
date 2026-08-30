@@ -1,5 +1,6 @@
 import sys
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,6 +31,32 @@ def _anchor(width: int, height: int, seed: int) -> NDArray[np.uint8]:
 
 HUD_ANCHOR = _anchor(60, 30, 10)
 MINIMAP_ANCHOR = _anchor(60, 60, 20)
+
+
+def _windows_1600x1024_frame() -> NDArray[np.uint8]:
+    image = np.zeros((1024, 1600, 3), dtype=np.uint8)
+    anchor_dir = Path("src/hero_siege_bot/assets/anchors")
+    hud = cv2.imread(
+        str(anchor_dir / "hud_status_right_cap_v2.png"),
+        cv2.IMREAD_COLOR,
+    )
+    minimap = cv2.imread(
+        str(anchor_dir / "minimap_top_left_corner.png"),
+        cv2.IMREAD_COLOR,
+    )
+    assert hud is not None
+    assert minimap is not None
+    image[12:79, 226:266] = cv2.resize(
+        hud,
+        (40, 67),
+        interpolation=cv2.INTER_AREA,
+    )
+    image[0:38, 1403:1441] = cv2.resize(
+        minimap,
+        (38, 38),
+        interpolation=cv2.INTER_AREA,
+    )
+    return image
 
 
 def _image(minimap_x: int = 1800) -> NDArray[np.uint8]:
@@ -165,6 +192,58 @@ def test_current_hud_profile_calibrates_verified_fixture_regions() -> None:
     assert _rect_iou(result.regions["minimap"], Rect(898, 0, 126, 143)) >= 0.9
     assert result.regions["gameplay"] == Rect(0, 0, 1024, 655)
     assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
+
+
+def test_scaled_profile_clips_only_full_frame_regions_on_1600x1024() -> None:
+    image = _windows_1600x1024_frame()
+    frames = [
+        CapturedFrame(
+            image=image.copy(),
+            client_rect=Rect(0, 0, 1600, 1024),
+            focused=True,
+            timestamp=float(index),
+        )
+        for index in range(5)
+    ]
+
+    config = load_config(Path("config/default.yaml"))
+    config = replace(
+        config,
+        calibration=replace(config.calibration, max_scale=1.6),
+    )
+    result = _load_calibrator(config).calibrate(frames)
+
+    assert result is not None
+    assert result.confidence >= 0.999
+    assert result.regions["health"] == Rect(87, 26, 163, 19)
+    assert result.regions["resource"] == Rect(87, 53, 163, 16)
+    assert result.regions["minimap"] == Rect(1403, 0, 200, 226)
+    assert result.regions["gameplay"] == Rect(0, 0, 1600, 1024)
+    assert result.regions["screen_state"] == Rect(0, 0, 1600, 1024)
+
+
+def test_non_clippable_anchor_region_preserves_invalid_overscan() -> None:
+    anchor = _anchor(20, 20, 44)
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    image[10:30, 10:30] = anchor
+    calibrator = AutoCalibrator(
+        CalibrationConfig(
+            confidence_threshold=0.9,
+            min_stable_frames=3,
+            min_scale=1.0,
+            max_scale=1.0,
+            scale_step=0.01,
+        ),
+        anchors={"hud": anchor},
+        regions={
+            "health": AnchorRegion("hud", -1.0, -1.0, 2.0, 2.0),
+        },
+    )
+
+    result = calibrator.calibrate(_frames([image, image.copy(), image.copy()]))
+
+    assert result is not None
+    assert result.regions["health"] == Rect(-10, -10, 40, 40)
 
 
 def test_selects_highest_confidence_stable_profile() -> None:

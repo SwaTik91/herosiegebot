@@ -84,10 +84,20 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
         ),
         "gameplay": AnchorRegion(
-            "hud_status_right_cap", -8.0, -0.375, 51.2, 20.46875
+            "hud_status_right_cap",
+            -8.0,
+            -0.375,
+            51.2,
+            20.46875,
+            clip_to_frame=True,
         ),
         "screen_state": AnchorRegion(
-            "hud_status_right_cap", -8.0, -0.375, 51.2, 20.46875
+            "hud_status_right_cap",
+            -8.0,
+            -0.375,
+            51.2,
+            20.46875,
+            clip_to_frame=True,
         ),
     }
     current_regions = {
@@ -101,10 +111,20 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
         ),
         "gameplay": AnchorRegion(
-            "hud_status_right_cap_v2", -5.8, -8 / 42, 40.96, 655 / 42
+            "hud_status_right_cap_v2",
+            -5.8,
+            -8 / 42,
+            40.96,
+            655 / 42,
+            clip_to_frame=True,
         ),
         "screen_state": AnchorRegion(
-            "hud_status_right_cap_v2", -5.8, -8 / 42, 40.96, 655 / 42
+            "hud_status_right_cap_v2",
+            -5.8,
+            -8 / 42,
+            40.96,
+            655 / 42,
+            clip_to_frame=True,
         ),
     }
     minimap = anchors["minimap_top_left_corner"]
