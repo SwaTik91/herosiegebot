@@ -140,9 +140,12 @@ class BotRuntime:
         self._state_reporter = state_reporter
         self._last_reported_state: BotState | None = None
         self._calibration_reporter = calibration_reporter
+        self._calibration_diagnostic: str | None = None
         self._last_reported_calibration_diagnostic: str | None = None
 
     def step(self) -> BotState:
+        if self._last_reported_state is None:
+            self._report_state(BotState.CALIBRATING)
         state = self._step()
         if state is BotState.CALIBRATING:
             self._report_state(state)
@@ -154,24 +157,39 @@ class BotRuntime:
 
     def _report_state(self, state: BotState) -> None:
         if self._state_reporter is not None and state is not self._last_reported_state:
-            self._state_reporter(state)
             self._last_reported_state = state
+            try:
+                self._state_reporter(state)
+            except BaseException as error:
+                self._release_after_reporter_failure(error)
+                raise
 
     def _report_calibration_diagnostic(self) -> None:
-        diagnostic = getattr(self.calibrator, "last_diagnostic", None)
+        diagnostic = self._calibration_diagnostic
         if (
             self._calibration_reporter is not None
             and isinstance(diagnostic, str)
             and diagnostic != self._last_reported_calibration_diagnostic
         ):
-            self._calibration_reporter(diagnostic)
             self._last_reported_calibration_diagnostic = diagnostic
+            try:
+                self._calibration_reporter(diagnostic)
+            except BaseException as error:
+                self._release_after_reporter_failure(error)
+                raise
+
+    def _release_after_reporter_failure(self, error: BaseException) -> None:
+        try:
+            self.input.release_all()
+        except Exception as release_error:  # noqa: BLE001 - preserve primary failure
+            error.add_note(f"release_all also failed: {release_error!r}")
 
     def _step(self) -> BotState:
         try:
             captured = self.capture.grab()
             if captured is None:
                 self.input.release_all()
+                self._calibration_diagnostic = "capture unavailable"
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED
             geometry = self._frame_geometry(captured)
@@ -184,11 +202,15 @@ class BotRuntime:
             if not captured.focused:
                 self.input.release_all()
                 self._invalidate_calibration()
+                self._calibration_diagnostic = "window focus lost"
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED
             if backend_changed or geometry_changed:
                 self.input.release_all()
                 self._invalidate_calibration()
+                self._calibration_diagnostic = (
+                    "capture geometry changed; recalibrating"
+                )
                 self._machine.state = BotState.CALIBRATING
                 return BotState.CALIBRATING
 
@@ -250,6 +272,10 @@ class BotRuntime:
             self._invalidate_calibration()
         self._calibration_frames.append(captured)
         candidate = self.calibrator.calibrate(tuple(self._calibration_frames))
+        diagnostic = getattr(self.calibrator, "last_diagnostic", None)
+        self._calibration_diagnostic = (
+            diagnostic if isinstance(diagnostic, str) else None
+        )
         if (
             candidate is not None
             and candidate.confidence >= self._calibration_confidence

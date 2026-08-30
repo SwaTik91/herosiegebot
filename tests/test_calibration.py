@@ -783,6 +783,10 @@ def test_rejects_sequence_when_one_frame_has_no_anchors() -> None:
     result = calibrator.calibrate(_frames([_image(), blank, _image()]))
 
     assert result is None
+    assert (
+        calibrator.last_diagnostic
+        == "template calibration rejected; waiting for proportional geometry"
+    )
 
 
 def test_rejects_anchors_that_disagree_across_frame_sequence() -> None:

@@ -305,6 +305,111 @@ def test_calibration_reporter_accepts_calibrator_without_diagnostic(
     assert reported == []
 
 
+def test_capture_unavailable_reports_runtime_diagnostic_once(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    capture.next_frame = None
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.PAUSED
+    assert runtime.step() is BotState.PAUSED
+
+    assert reported == ["capture unavailable"]
+
+
+def test_focus_loss_reports_runtime_diagnostic_once(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    capture.next_frame = frame(focused=False)
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.PAUSED
+    assert runtime.step() is BotState.PAUSED
+
+    assert reported == ["window focus lost"]
+
+
+def test_geometry_change_reports_recalibration_diagnostic_once(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(
+        client_rect=Rect(100, 50, 30, 20),
+        image_size=(20, 30),
+    )
+
+    assert runtime.step() is BotState.CALIBRATING
+    assert runtime.step() is BotState.EXPLORING
+
+    assert reported == ["capture geometry changed; recalibrating"]
+
+
+def test_reporter_failure_releases_input_and_does_not_repeat_diagnostic(
+    runtime_parts: dict[str, object],
+) -> None:
+    emitted: list[str] = []
+    calibrator = DiagnosticCalibratorFake()
+    calibrator.last_diagnostic = "calibrated with proportional geometry"
+    runtime_parts["calibrator"] = calibrator
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(input_spy, InputSpy)
+
+    def fail_after_emit(message: str) -> None:
+        emitted.append(message)
+        raise RuntimeError("reporter failed")
+
+    runtime_parts["calibration_reporter"] = fail_after_emit
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="reporter failed"):
+        runtime.step()
+
+    assert input_spy.release_all_calls == 1
+    assert runtime.step() is BotState.EXPLORING
+    assert emitted == ["calibrated with proportional geometry"]
+
+
+def test_reporter_error_remains_primary_when_input_release_fails(
+    runtime_parts: dict[str, object],
+) -> None:
+    class FailingReleaseInput(InputSpy):
+        def release_all(self) -> None:
+            super().release_all()
+            raise OSError("release failed")
+
+    calibrator = DiagnosticCalibratorFake()
+    calibrator.last_diagnostic = "calibrated with proportional geometry"
+    runtime_parts["calibrator"] = calibrator
+    runtime_parts["input_controller"] = FailingReleaseInput()
+
+    def fail_after_emit(message: str) -> None:
+        del message
+        raise RuntimeError("reporter failed")
+
+    runtime_parts["calibration_reporter"] = fail_after_emit
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="reporter failed") as captured:
+        runtime.step()
+
+    assert captured.value.__notes__ == [
+        "release_all also failed: OSError('release failed')"
+    ]
+
+
 def test_cli_console_status_is_concise_and_uppercase(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -313,17 +418,21 @@ def test_cli_console_status_is_concise_and_uppercase(
     assert capsys.readouterr().out == "CALIBRATING\n"
 
 
-def test_cli_console_reports_calibration_progress_between_states(
+def test_runtime_orders_initial_state_diagnostic_and_exploring_output(
+    runtime_parts: dict[str, object],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    cli._print_state(BotState.CALIBRATING)
-    cli._print_calibration_diagnostic("waiting for 3 stable frames (2/3)")
-    cli._print_calibration_diagnostic("calibrated with proportional geometry")
-    cli._print_state(BotState.EXPLORING)
+    calibrator = DiagnosticCalibratorFake()
+    calibrator.last_diagnostic = "calibrated with proportional geometry"
+    runtime_parts["calibrator"] = calibrator
+    runtime_parts["state_reporter"] = cli._print_state
+    runtime_parts["calibration_reporter"] = cli._print_calibration_diagnostic
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.EXPLORING
 
     assert capsys.readouterr().out == (
         "CALIBRATING\n"
-        "calibration: waiting for 3 stable frames (2/3)\n"
         "calibration: calibrated with proportional geometry\n"
         "EXPLORING\n"
     )

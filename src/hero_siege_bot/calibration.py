@@ -283,7 +283,9 @@ class AutoCalibrator:
         if template is not None:
             self._last_diagnostic = "calibrated with template anchors"
             return template
-        self._last_diagnostic = "waiting for stable calibration geometry"
+        self._last_diagnostic = (
+            "template calibration rejected; waiting for proportional geometry"
+        )
         return self._build_fallback(frames[-required:])
 
     def _build_fallback(
