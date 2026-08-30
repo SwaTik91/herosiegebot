@@ -29,6 +29,17 @@ class ControlsConfig:
     potions: tuple[str, ...]
     emergency_stop: str
 
+    def __post_init__(self) -> None:
+        required_movement = {"up": "W", "left": "A", "down": "S", "right": "D"}
+        if self.movement != required_movement:
+            raise ValueError("movement must use the required WASD bindings")
+        if self.skills != ("Q", "E"):
+            raise ValueError("skills must use the required Q/E bindings")
+        if self.potions != ("1", "2"):
+            raise ValueError("potions must use the required 1/2 bindings")
+        if self.emergency_stop != "F12":
+            raise ValueError("emergency_stop must remain F12")
+
 
 @dataclass(frozen=True)
 class CalibrationConfig:
@@ -155,14 +166,27 @@ def _mapping(value: object, name: str) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
-def _merged(raw: dict[str, object]) -> dict[str, dict[str, object]]:
-    result: dict[str, dict[str, object]] = {}
-    for name, default in _DEFAULTS.items():
-        section = dict(_mapping(default, name))
-        if name in raw:
-            section.update(_mapping(raw[name], name))
-        result[name] = section
+def _merge_mapping(
+    defaults: Mapping[str, object], overrides: Mapping[str, object]
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, default in defaults.items():
+        override = overrides.get(key, default)
+        if isinstance(default, dict) and isinstance(override, dict):
+            result[key] = _merge_mapping(
+                cast(dict[str, object], default), cast(dict[str, object], override)
+            )
+        else:
+            result[key] = override
+    for key, override in overrides.items():
+        if key not in result:
+            result[key] = override
     return result
+
+
+def _merged(raw: dict[str, object]) -> dict[str, dict[str, object]]:
+    merged = _merge_mapping(_DEFAULTS, raw)
+    return {name: _mapping(value, name) for name, value in merged.items()}
 
 
 def _float(section: Mapping[str, object], name: str) -> float:
@@ -176,6 +200,13 @@ def _int(section: Mapping[str, object], name: str) -> int:
     value = section[name]
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer")
+    return value
+
+
+def _bool(section: Mapping[str, object], name: str) -> bool:
+    value = section[name]
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a boolean")
     return value
 
 
@@ -238,8 +269,8 @@ def load_config(path: Path) -> BotConfig:
             stuck_timeout_s=_float(exploration, "stuck_timeout_s"),
         ),
         recording=RecordingConfig(
-            enabled=bool(recording["enabled"]),
-            overlay=bool(recording["overlay"]),
+            enabled=_bool(recording, "enabled"),
+            overlay=_bool(recording, "overlay"),
             frame_interval_s=_float(recording, "frame_interval_s"),
         ),
     )
