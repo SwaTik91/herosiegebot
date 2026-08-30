@@ -231,8 +231,9 @@ class SafeInput:
 class WindowsEmergencyHotkey:
     _HOTKEY_ID = 0x4853
     _WM_HOTKEY = 0x0312
-    _WM_QUIT = 0x0012
     _PM_NOREMOVE = 0x0000
+    _PM_REMOVE = 0x0001
+    _POLL_INTERVAL_S = 0.01
     _MOD_CONTROL = 0x0002
     _MOD_SHIFT = 0x0004
     _MOD_NOREPEAT = 0x4000
@@ -243,12 +244,10 @@ class WindowsEmergencyHotkey:
             raise ValueError("registration_timeout_s must be positive")
         self._registration_timeout_s = registration_timeout_s
         self._ready = threading.Event()
-        self._queue_ready = threading.Event()
         self._shutdown = threading.Event()
         self._registered = False
         self._registration_error_code: int | None = None
         self._thread: threading.Thread | None = None
-        self._thread_id: int | None = None
         self._lock = threading.Lock()
 
     def register(self, callback: Callable[[], None]) -> None:
@@ -258,7 +257,6 @@ class WindowsEmergencyHotkey:
             if self._thread is not None:
                 raise RuntimeError("Ctrl+Shift+F10 hotkey is already registered")
             self._ready.clear()
-            self._queue_ready.clear()
             self._shutdown.clear()
             self._registered = False
             self._registration_error_code = None
@@ -275,9 +273,12 @@ class WindowsEmergencyHotkey:
             raise TimeoutError("timed out waiting for Ctrl+Shift+F10 RegisterHotKey")
         if not self._registered:
             thread.join(self._registration_timeout_s)
+            if thread.is_alive():
+                raise RuntimeError(
+                    "Ctrl+Shift+F10 hotkey thread did not shut down"
+                )
             with self._lock:
                 self._thread = None
-                self._thread_id = None
             raise RuntimeError(
                 "RegisterHotKey failed for mandatory Ctrl+Shift+F10 emergency stop "
                 f"(Win32 error {self._registration_error_code})"
@@ -289,20 +290,11 @@ class WindowsEmergencyHotkey:
             if thread is None:
                 return
             self._shutdown.set()
-        while thread.is_alive() and not self._queue_ready.wait(0.01):
-            pass
-        with self._lock:
-            thread_id = self._thread_id
-        if thread.is_alive() and thread_id is not None and sys.platform == "win32":
-            import ctypes
-
-            cast(Any, ctypes).windll.user32.PostThreadMessageW(
-                thread_id, self._WM_QUIT, 0, 0
-            )
-        thread.join()
+        thread.join(self._registration_timeout_s)
+        if thread.is_alive():
+            raise RuntimeError("Ctrl+Shift+F10 hotkey thread did not shut down")
         with self._lock:
             self._thread = None
-            self._thread_id = None
             self._registered = False
 
     def _report_registration(
@@ -322,9 +314,6 @@ class WindowsEmergencyHotkey:
         user32.PeekMessageW(
             ctypes.byref(message), None, 0, 0, self._PM_NOREMOVE
         )
-        with self._lock:
-            self._thread_id = kernel32.GetCurrentThreadId()
-            self._queue_ready.set()
         if self._shutdown.is_set():
             return
         registered = bool(
@@ -341,20 +330,23 @@ class WindowsEmergencyHotkey:
             return
         try:
             while not self._shutdown.is_set():
-                result = user32.GetMessageW(
-                    ctypes.byref(message), None, 0, 0
-                )
-                if result <= 0:
-                    break
-                if self._shutdown.is_set():
-                    break
-                if message.message == self._WM_HOTKEY:
+                while (
+                    not self._shutdown.is_set()
+                    and user32.PeekMessageW(
+                        ctypes.byref(message),
+                        None,
+                        self._WM_HOTKEY,
+                        self._WM_HOTKEY,
+                        self._PM_REMOVE,
+                    )
+                ):
                     try:
                         callback()
                     except Exception:
                         _LOGGER.exception(
                             "Ctrl+Shift+F10 emergency-stop callback failed"
                         )
+                self._shutdown.wait(self._POLL_INTERVAL_S)
         finally:
             user32.UnregisterHotKey(None, self._HOTKEY_ID)
 
