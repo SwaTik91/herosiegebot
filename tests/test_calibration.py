@@ -79,6 +79,42 @@ def _rect_iou(left: Rect, right: Rect) -> float:
     return intersection / union
 
 
+def _real_frame_variants(
+    image: NDArray[np.uint8],
+    *,
+    scale: float = 1.0,
+    offset_x: int = 0,
+    offset_y: int = 0,
+) -> list[NDArray[np.uint8]]:
+    variants: list[NDArray[np.uint8]] = []
+    perturb_x = offset_x + round(300 * scale)
+    perturb_y = offset_y + round(400 * scale)
+    perturb_width = max(8, round(40 * scale))
+    perturb_height = max(8, round(30 * scale))
+    for index, (contrast, brightness) in enumerate(
+        ((0.97, -4.0), (1.0, 0.0), (1.03, 4.0))
+    ):
+        variant = np.clip(
+            image.astype(np.float32) * contrast + brightness,
+            0,
+            255,
+        ).astype(np.uint8)
+        noise = np.random.default_rng(800 + index).integers(
+            0,
+            32,
+            (perturb_height, perturb_width, 3),
+            dtype=np.uint8,
+        )
+        variant[
+            perturb_y : perturb_y + perturb_height,
+            perturb_x : perturb_x + perturb_width,
+        ] = noise
+        variants.append(variant)
+    assert not np.array_equal(variants[0], variants[1])
+    assert not np.array_equal(variants[1], variants[2])
+    return variants
+
+
 def test_calibrates_scaled_hud_and_minimap_regions_across_three_frames() -> None:
     calibrator = _calibrator()
 
@@ -96,7 +132,7 @@ def test_real_anchors_calibrate_verified_fixture_regions() -> None:
         cv2.IMREAD_COLOR,
     )
     assert image is not None
-    frames = _frames([image, image, image])
+    frames = _frames(_real_frame_variants(image))
 
     result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(frames)
 
@@ -150,7 +186,14 @@ def test_real_anchors_localize_deterministic_offline_variants(
     ] = adjusted
 
     result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(
-        _frames([transformed, transformed, transformed])
+        _frames(
+            _real_frame_variants(
+                transformed,
+                scale=scale,
+                offset_x=offset_x,
+                offset_y=offset_y,
+            )
+        )
     )
 
     assert result is not None

@@ -30,7 +30,9 @@ evidence to tune those values honestly.
 The exact fixture matches both anchors at the configured threshold and
 reconstructs the annotated HUD regions. Deterministic offline tests also apply
 0.8× and 1.2× resizing, translation, and positive/negative brightness offsets;
-both anchors remain above 0.9 confidence, region origins remain within two
+each calibration sequence uses three distinct frames with per-frame
+brightness/contrast variation and seeded non-anchor background perturbations.
+Both anchors remain above 0.9 confidence, region origins remain within two
 pixels, and region overlap remains at least 0.8 IoU. These are synthetic
 robustness checks on one source image, not claims of live multi-frame,
 multi-resolution, UI-scale, or Windows stability.

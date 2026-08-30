@@ -215,6 +215,53 @@ def test_detector_thresholds_and_colors_are_configurable(tmp_path: Path) -> None
     assert detectors.player_marker_hsv_upper == (100, 255, 255)
 
 
+def _assert_status_annotation(field: str, annotation: object) -> None:
+    assert isinstance(annotation, dict)
+    assert set(annotation) == {"status", "value"}
+    status = annotation["status"]
+    value = annotation["value"]
+    assert status in {"verified", "unknown"}
+    if status == "unknown":
+        assert value is None
+        return
+
+    if field == "player_map_point":
+        if value is None:
+            return
+        assert isinstance(value, dict)
+        assert set(value) == {"x", "y"}
+        assert all(
+            isinstance(value[axis], (int, float))
+            and not isinstance(value[axis], bool)
+            and 0.0 <= value[axis] <= 1.0
+            for axis in ("x", "y")
+        )
+    elif field == "bar_ratios":
+        assert isinstance(value, dict)
+        assert set(value) == {"health", "resource"}
+        assert all(
+            value[name] is None
+            or (
+                isinstance(value[name], (int, float))
+                and not isinstance(value[name], bool)
+                and 0.0 <= value[name] <= 1.0
+            )
+            for name in ("health", "resource")
+        )
+    elif field in {"enemy_boxes", "loot_boxes"}:
+        assert isinstance(value, list)
+        for box in value:
+            assert isinstance(box, dict)
+            assert set(box) == {"x", "y", "width", "height"}
+            assert all(isinstance(box[name], int) for name in box)
+            assert box["width"] > 0
+            assert box["height"] > 0
+    elif field in {"death", "restart_visible"}:
+        assert isinstance(value, bool)
+    else:
+        raise AssertionError(f"unknown annotation field: {field}")
+
+
 @pytest.mark.parametrize("image_path", RECORDED_FRAMES or (None,))
 def test_recorded_frame_has_complete_status_aware_sidecar(
     image_path: Path | None,
@@ -256,14 +303,45 @@ def test_recorded_frame_has_complete_status_aware_sidecar(
         "death",
         "restart_visible",
     ):
-        annotation = expected[field]
-        assert set(annotation) == {"status", "value"}
-        assert annotation["status"] in {"verified", "unknown"}
-        if annotation["status"] == "unknown":
-            assert annotation["value"] is None
+        _assert_status_annotation(field, expected[field])
 
-    assert expected["enemy_boxes"] == {"status": "unknown", "value": None}
-    assert expected["loot_boxes"] == {"status": "unknown", "value": None}
-    assert expected["player_map_point"] == {"status": "unknown", "value": None}
-    assert expected["death"] == {"status": "verified", "value": False}
-    assert expected["restart_visible"] == {"status": "verified", "value": False}
+
+@pytest.mark.parametrize(
+    ("field", "annotation"),
+    [
+        ("enemy_boxes", {"status": "unknown", "value": None}),
+        ("enemy_boxes", {"status": "verified", "value": []}),
+        (
+            "loot_boxes",
+            {
+                "status": "verified",
+                "value": [{"x": 10, "y": 20, "width": 5, "height": 6}],
+            },
+        ),
+        ("player_map_point", {"status": "verified", "value": None}),
+        (
+            "player_map_point",
+            {"status": "verified", "value": {"x": 0.25, "y": 0.75}},
+        ),
+        (
+            "bar_ratios",
+            {
+                "status": "verified",
+                "value": {"health": 1.0, "resource": None},
+            },
+        ),
+        ("death", {"status": "verified", "value": False}),
+    ],
+)
+def test_status_annotation_schema_accepts_unknown_and_typed_verified_values(
+    field: str, annotation: dict[str, object]
+) -> None:
+    _assert_status_annotation(field, annotation)
+
+
+def test_unknown_annotation_rejects_verified_absence_value() -> None:
+    with pytest.raises(AssertionError):
+        _assert_status_annotation(
+            "enemy_boxes",
+            {"status": "unknown", "value": []},
+        )
