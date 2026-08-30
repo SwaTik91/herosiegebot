@@ -68,6 +68,48 @@ def test_release_all_releases_every_tracked_key_and_button() -> None:
     ]
 
 
+def test_failed_releases_remain_tracked_for_retry_while_all_are_attempted() -> None:
+    class FaultInjectingBackend(DryRunInputBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_key = False
+            self.failed_button = False
+
+        def key_up(self, key: str) -> None:
+            self.events.append(("key_up", key))
+            if not self.failed_key:
+                self.failed_key = True
+                raise RuntimeError("key release failed")
+
+        def mouse_up(self, button: str) -> None:
+            self.events.append(("mouse_up", button))
+            if not self.failed_button:
+                self.failed_button = True
+                raise RuntimeError("mouse release failed")
+
+    backend = FaultInjectingBackend()
+    safe_input = SafeInput(backend, max_key_hold_s=0.2, max_mouse_hold_s=0.3)
+    safe_input.execute(
+        (
+            Action(kind="key_down", key="Q"),
+            Action(kind="mouse_down", key="left"),
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="key release failed"):
+        safe_input.release_all()
+
+    assert backend.events[-2:] == [
+        ("key_up", "Q"),
+        ("mouse_up", "left"),
+    ]
+
+    safe_input.release_all()
+
+    assert backend.events.count(("key_up", "Q")) == 2
+    assert backend.events.count(("mouse_up", "left")) == 2
+
+
 def test_emergency_stop_releases_input_and_rejects_actions_until_reset() -> None:
     backend = DryRunInputBackend()
     safe_input = SafeInput(backend, max_key_hold_s=0.2, max_mouse_hold_s=0.3)

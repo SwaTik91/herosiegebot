@@ -2,6 +2,7 @@ from hero_siege_bot.config import CombatConfig, SurvivalConfig
 from hero_siege_bot.domain import Action, Detection, Observation
 
 _KEY_TAP_DURATION_S = 0.05
+_COMBAT_SKILL_KEYS = ("Q", "E")
 
 
 def _best_detection(
@@ -18,8 +19,11 @@ def _best_detection(
 
 class CombatController:
     def __init__(self, config: CombatConfig) -> None:
+        if set(config.skill_cooldowns_s) != set(_COMBAT_SKILL_KEYS):
+            raise ValueError("combat skills must contain exactly Q/E")
         self._config = config
         self._last_skill_use: dict[str, float] = {}
+        self._started_at: float | None = None
 
     def actions(self, observation: Observation, now: float) -> tuple[Action, ...]:
         target = _best_detection(
@@ -27,6 +31,11 @@ class CombatController:
             self._config.detection_confidence,
         )
         if target is None:
+            self._started_at = None
+            return ()
+        if self._started_at is None:
+            self._started_at = now
+        if now - self._started_at >= self._config.combat_timeout_s:
             return ()
 
         actions = [
@@ -37,7 +46,8 @@ class CombatController:
                 duration_s=self._config.attack_hold_s,
             ),
         ]
-        for key, cooldown_s in self._config.skill_cooldowns_s.items():
+        for key in _COMBAT_SKILL_KEYS:
+            cooldown_s = self._config.skill_cooldowns_s[key]
             last_used = self._last_skill_use.get(key)
             if last_used is None or now - last_used >= cooldown_s:
                 actions.append(

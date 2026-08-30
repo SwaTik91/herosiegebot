@@ -92,14 +92,16 @@ class SafeInput:
                 except Exception as error:  # noqa: BLE001 - continue releasing all input
                     if first_error is None:
                         first_error = error
-            self._pressed_keys.clear()
+                else:
+                    self._pressed_keys.discard(key)
             for button in sorted(self._pressed_buttons):
                 try:
                     self._backend.mouse_up(button)
                 except Exception as error:  # noqa: BLE001 - continue releasing all input
                     if first_error is None:
                         first_error = error
-            self._pressed_buttons.clear()
+                else:
+                    self._pressed_buttons.discard(button)
         if first_error is not None:
             raise first_error
 
@@ -158,10 +160,8 @@ class SafeInput:
         with self._lock:
             if key not in self._pressed_keys:
                 return
-            try:
-                self._backend.key_up(key)
-            finally:
-                self._pressed_keys.discard(key)
+            self._backend.key_up(key)
+            self._pressed_keys.discard(key)
 
     def _hold_key(self, key: str, duration_s: float) -> None:
         self._press_key(key)
@@ -182,10 +182,8 @@ class SafeInput:
         with self._lock:
             if button not in self._pressed_buttons:
                 return
-            try:
-                self._backend.mouse_up(button)
-            finally:
-                self._pressed_buttons.discard(button)
+            self._backend.mouse_up(button)
+            self._pressed_buttons.discard(button)
 
     def _hold_button(self, button: str, duration_s: float) -> None:
         self._press_button(button)

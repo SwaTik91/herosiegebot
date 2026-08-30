@@ -85,6 +85,8 @@ class CombatConfig:
         _positive("attack_hold_s", self.attack_hold_s)
         _positive("combat_timeout_s", self.combat_timeout_s)
         _positive("loot_timeout_s", self.loot_timeout_s)
+        if set(self.skill_cooldowns_s) != {"Q", "E"}:
+            raise ValueError("skill_cooldowns_s must contain exactly Q/E")
         for key, duration in self.skill_cooldowns_s.items():
             _positive(f"skill_cooldowns_s.{key}", duration)
 

@@ -1,5 +1,7 @@
 from types import MappingProxyType
 
+import pytest
+
 from hero_siege_bot.config import CombatConfig, SurvivalConfig
 from hero_siege_bot.controllers import CombatController, LootController, SurvivalController
 from hero_siege_bot.domain import Action, Detection, Observation, Point
@@ -70,6 +72,45 @@ def test_combat_skills_respect_independent_cooldowns() -> None:
     assert tuple(action.key for action in too_soon[2:]) == ()
     assert tuple(action.key for action in q_ready[2:]) == ("Q",)
     assert tuple(action.key for action in e_ready[2:]) == ("E",)
+
+
+def test_combat_stops_emitting_actions_at_encounter_timeout() -> None:
+    controller = CombatController(combat_config())
+    observed = observation(enemies=(detection("enemy", 0.5, 0.9),))
+
+    assert controller.actions(observed, now=20.0)
+    assert controller.actions(observed, now=29.9)
+    assert controller.actions(observed, now=30.0) == ()
+
+
+def test_combat_timeout_resets_after_enemies_clear() -> None:
+    controller = CombatController(combat_config())
+    observed = observation(enemies=(detection("enemy", 0.5, 0.9),))
+
+    assert controller.actions(observed, now=20.0)
+    assert controller.actions(observed, now=30.0) == ()
+    assert controller.actions(observation(), now=31.0) == ()
+    assert controller.actions(observed, now=40.0)
+
+
+@pytest.mark.parametrize(
+    "cooldowns",
+    [
+        {"Q": 5.0},
+        {"Q": 5.0, "E": 8.0, "R": 1.0},
+    ],
+)
+def test_combat_config_requires_exact_q_and_e_skills(
+    cooldowns: dict[str, float],
+) -> None:
+    with pytest.raises(ValueError, match="Q/E"):
+        CombatConfig(
+            detection_confidence=0.7,
+            attack_hold_s=0.25,
+            skill_cooldowns_s=MappingProxyType(cooldowns),
+            combat_timeout_s=10.0,
+            loot_timeout_s=3.0,
+        )
 
 
 def test_survival_uses_health_potion_once_per_cooldown() -> None:
