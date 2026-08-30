@@ -32,6 +32,22 @@ combat:
   combat_timeout_s: 10.0
   loot_timeout_s: 3.0
 
+detectors:
+  template_confidence: 0.8
+  nms_iou_threshold: 0.3
+  motion_threshold: 25
+  min_candidate_area: 12
+  bar_min_border_confidence: 0.7
+  health_fill_hsv_lower: [0, 120, 100]
+  health_fill_hsv_upper: [10, 255, 255]
+  resource_fill_hsv_lower: [105, 120, 100]
+  resource_fill_hsv_upper: [130, 255, 255]
+  bar_border_hsv_lower: [0, 0, 180]
+  bar_border_hsv_upper: [179, 80, 255]
+  player_marker_hsv_lower: [80, 120, 120]
+  player_marker_hsv_upper: [100, 255, 255]
+  player_marker_min_area: 4
+
 exploration:
   movement_pulse_s: 0.15
   max_movement_pulse_s: 0.3

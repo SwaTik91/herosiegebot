@@ -90,6 +90,57 @@ class CombatConfig:
 
 
 @dataclass(frozen=True)
+class DetectorConfig:
+    template_confidence: float
+    nms_iou_threshold: float
+    motion_threshold: int
+    min_candidate_area: int
+    bar_min_border_confidence: float
+    health_fill_hsv_lower: tuple[int, int, int]
+    health_fill_hsv_upper: tuple[int, int, int]
+    resource_fill_hsv_lower: tuple[int, int, int]
+    resource_fill_hsv_upper: tuple[int, int, int]
+    bar_border_hsv_lower: tuple[int, int, int]
+    bar_border_hsv_upper: tuple[int, int, int]
+    player_marker_hsv_lower: tuple[int, int, int]
+    player_marker_hsv_upper: tuple[int, int, int]
+    player_marker_min_area: int
+
+    def __post_init__(self) -> None:
+        for name in (
+            "template_confidence",
+            "nms_iou_threshold",
+            "bar_min_border_confidence",
+        ):
+            _ratio(name, cast(float, getattr(self, name)))
+        if not 0 <= self.motion_threshold <= 255:
+            raise ValueError("motion_threshold must be between 0 and 255")
+        if self.min_candidate_area <= 0:
+            raise ValueError("min_candidate_area must be positive")
+        if self.player_marker_min_area <= 0:
+            raise ValueError("player_marker_min_area must be positive")
+        pairs = (
+            ("health_fill", self.health_fill_hsv_lower, self.health_fill_hsv_upper),
+            (
+                "resource_fill",
+                self.resource_fill_hsv_lower,
+                self.resource_fill_hsv_upper,
+            ),
+            ("bar_border", self.bar_border_hsv_lower, self.bar_border_hsv_upper),
+            (
+                "player_marker",
+                self.player_marker_hsv_lower,
+                self.player_marker_hsv_upper,
+            ),
+        )
+        for name, lower, upper in pairs:
+            _validate_hsv(f"{name}_hsv_lower", lower)
+            _validate_hsv(f"{name}_hsv_upper", upper)
+            if any(low > high for low, high in zip(lower, upper, strict=True)):
+                raise ValueError(f"{name}_hsv_lower must not exceed {name}_hsv_upper")
+
+
+@dataclass(frozen=True)
 class ExplorationConfig:
     movement_pulse_s: float
     max_movement_pulse_s: float
@@ -172,6 +223,7 @@ class BotConfig:
     calibration: CalibrationConfig
     survival: SurvivalConfig
     combat: CombatConfig
+    detectors: DetectorConfig
     exploration: ExplorationConfig
     recording: RecordingConfig
 
@@ -202,6 +254,22 @@ _DEFAULTS: dict[str, object] = {
         "skill_cooldowns_s": {"Q": 5.0, "E": 8.0},
         "combat_timeout_s": 10.0,
         "loot_timeout_s": 3.0,
+    },
+    "detectors": {
+        "template_confidence": 0.8,
+        "nms_iou_threshold": 0.3,
+        "motion_threshold": 25,
+        "min_candidate_area": 12,
+        "bar_min_border_confidence": 0.7,
+        "health_fill_hsv_lower": [0, 120, 100],
+        "health_fill_hsv_upper": [10, 255, 255],
+        "resource_fill_hsv_lower": [105, 120, 100],
+        "resource_fill_hsv_upper": [130, 255, 255],
+        "bar_border_hsv_lower": [0, 0, 180],
+        "bar_border_hsv_upper": [179, 80, 255],
+        "player_marker_hsv_lower": [80, 120, 120],
+        "player_marker_hsv_upper": [100, 255, 255],
+        "player_marker_min_area": 4,
     },
     "exploration": {
         "movement_pulse_s": 0.15,
@@ -292,6 +360,12 @@ def _hsv(value: object, name: str) -> tuple[int, int, int]:
     return cast(tuple[int, int, int], tuple(value))
 
 
+def _validate_hsv(name: str, hsv: tuple[int, int, int]) -> None:
+    limits = (179, 255, 255)
+    if any(value < 0 or value > limit for value, limit in zip(hsv, limits, strict=True)):
+        raise ValueError(f"{name} contains an out-of-range HSV channel")
+
+
 def load_config(path: Path) -> BotConfig:
     loaded = yaml.safe_load(path.read_text())
     if loaded is None:
@@ -305,6 +379,7 @@ def load_config(path: Path) -> BotConfig:
     calibration = sections["calibration"]
     survival = sections["survival"]
     combat = sections["combat"]
+    detectors = sections["detectors"]
     exploration = sections["exploration"]
     recording = sections["recording"]
 
@@ -338,6 +413,40 @@ def load_config(path: Path) -> BotConfig:
             ),
             combat_timeout_s=_float(combat, "combat_timeout_s"),
             loot_timeout_s=_float(combat, "loot_timeout_s"),
+        ),
+        detectors=DetectorConfig(
+            template_confidence=_float(detectors, "template_confidence"),
+            nms_iou_threshold=_float(detectors, "nms_iou_threshold"),
+            motion_threshold=_int(detectors, "motion_threshold"),
+            min_candidate_area=_int(detectors, "min_candidate_area"),
+            bar_min_border_confidence=_float(
+                detectors, "bar_min_border_confidence"
+            ),
+            health_fill_hsv_lower=_hsv(
+                detectors["health_fill_hsv_lower"], "health_fill_hsv_lower"
+            ),
+            health_fill_hsv_upper=_hsv(
+                detectors["health_fill_hsv_upper"], "health_fill_hsv_upper"
+            ),
+            resource_fill_hsv_lower=_hsv(
+                detectors["resource_fill_hsv_lower"], "resource_fill_hsv_lower"
+            ),
+            resource_fill_hsv_upper=_hsv(
+                detectors["resource_fill_hsv_upper"], "resource_fill_hsv_upper"
+            ),
+            bar_border_hsv_lower=_hsv(
+                detectors["bar_border_hsv_lower"], "bar_border_hsv_lower"
+            ),
+            bar_border_hsv_upper=_hsv(
+                detectors["bar_border_hsv_upper"], "bar_border_hsv_upper"
+            ),
+            player_marker_hsv_lower=_hsv(
+                detectors["player_marker_hsv_lower"], "player_marker_hsv_lower"
+            ),
+            player_marker_hsv_upper=_hsv(
+                detectors["player_marker_hsv_upper"], "player_marker_hsv_upper"
+            ),
+            player_marker_min_area=_int(detectors, "player_marker_min_area"),
         ),
         exploration=ExplorationConfig(
             movement_pulse_s=_float(exploration, "movement_pulse_s"),
