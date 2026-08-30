@@ -12,6 +12,8 @@
   `Rect(1403, 0, 197, 226)`; larger overscan remains invalid.
 - Keeps health/resource regions strict and preserves invalid-region rejection
   for minimap overscan beyond the explicit tolerance.
+- Raises the shipped YAML and fallback calibration `max_scale` from 1.5 to 2.0,
+  so the 1.6-scale Windows reproduction works without test-only configuration.
 - Adds a 1600×1024 regression fixture built from the installed anchors and an
   integration test from calibration through perception.
 

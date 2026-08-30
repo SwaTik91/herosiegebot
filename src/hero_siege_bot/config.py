@@ -242,7 +242,7 @@ _DEFAULTS: dict[str, object] = {
         "confidence_threshold": 0.9,
         "min_stable_frames": 3,
         "min_scale": 0.5,
-        "max_scale": 1.5,
+        "max_scale": 2.0,
         "scale_step": 0.05,
     },
     "survival": {

@@ -1,4 +1,3 @@
-from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -227,10 +226,6 @@ def test_scaled_calibration_feeds_perception_without_invalid_crop_pause() -> Non
         timestamp=12.5,
     )
     config = load_config(Path("config/default.yaml"))
-    config = replace(
-        config,
-        calibration=replace(config.calibration, max_scale=1.6),
-    )
     calibration = _load_calibrator(config).calibrate([captured] * 5)
     assert calibration is not None
     assert calibration.regions["minimap"] == Rect(1403, 0, 197, 226)

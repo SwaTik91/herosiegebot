@@ -1,6 +1,5 @@
 import sys
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -208,12 +207,9 @@ def test_scaled_profile_clips_tolerated_edge_overscan_on_1600x1024() -> None:
         for index in range(5)
     ]
 
-    config = load_config(Path("config/default.yaml"))
-    config = replace(
-        config,
-        calibration=replace(config.calibration, max_scale=1.6),
+    result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(
+        frames
     )
-    result = _load_calibrator(config).calibrate(frames)
 
     assert result is not None
     assert result.confidence >= 0.999
@@ -235,17 +231,57 @@ def test_scaled_profile_preserves_minimap_overscan_beyond_tolerance() -> None:
         )
         for index in range(5)
     ]
-    config = load_config(Path("config/default.yaml"))
-    config = replace(
-        config,
-        calibration=replace(config.calibration, max_scale=1.6),
+    result = _load_calibrator(load_config(Path("config/default.yaml"))).calibrate(
+        frames
     )
-
-    result = _load_calibrator(config).calibrate(frames)
 
     assert result is not None
     assert result.regions["minimap"] == Rect(1415, 0, 200, 226)
     assert result.regions["minimap"].x + result.regions["minimap"].width > 1600
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "expected"),
+    [
+        (-2, 20, Rect(0, 20, 38, 40)),
+        (-3, 20, Rect(-3, 20, 40, 40)),
+        (20, -2, Rect(20, 0, 40, 38)),
+        (20, -3, Rect(20, -3, 40, 40)),
+    ],
+)
+def test_minimap_edge_clipping_honors_exact_negative_edge_tolerance(
+    x: int,
+    y: int,
+    expected: Rect,
+) -> None:
+    anchor = _anchor(10, 10, 45)
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    image[50:60, 50:60] = anchor
+    calibrator = AutoCalibrator(
+        CalibrationConfig(
+            confidence_threshold=0.9,
+            min_stable_frames=3,
+            min_scale=1.0,
+            max_scale=1.0,
+            scale_step=0.01,
+        ),
+        anchors={"minimap": anchor},
+        regions={
+            "minimap": AnchorRegion(
+                "minimap",
+                (x - 50) / 10,
+                (y - 50) / 10,
+                4.0,
+                4.0,
+                edge_clip_tolerance=0.05,
+            ),
+        },
+    )
+
+    result = calibrator.calibrate(_frames([image, image.copy(), image.copy()]))
+
+    assert result is not None
+    assert result.regions["minimap"] == expected
 
 
 def test_non_clippable_anchor_region_preserves_invalid_overscan() -> None:

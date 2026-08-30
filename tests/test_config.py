@@ -28,6 +28,15 @@ def test_default_config_uses_expected_controls() -> None:
     assert config.controls.emergency_stop == "CTRL+SHIFT+F10"
 
 
+@pytest.mark.parametrize("contents", ["{}", "calibration: {}"])
+def test_default_calibration_supports_two_x_profile_scale(
+    tmp_path: Path, contents: str
+) -> None:
+    config = load_config(write_config(tmp_path, contents))
+
+    assert config.calibration.max_scale == 2.0
+
+
 def test_load_config_rejects_non_positive_duration(tmp_path: Path) -> None:
     path = tmp_path / "bad.yaml"
     path.write_text("combat:\n  attack_hold_s: 0\n")
