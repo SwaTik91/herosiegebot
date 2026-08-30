@@ -139,6 +139,31 @@ def test_three_no_progress_samples_exclude_current_frontier() -> None:
     assert abs(second_target.x - first_target.x) > 0.3
 
 
+def test_recent_failure_penalty_ranks_down_nearby_reachable_frontier() -> None:
+    explored = np.zeros((11, 21), dtype=np.bool_)
+    explored[5, 1:20] = True
+    player = Point(0.5, 0.5)
+    explorer = FrontierExplorer(
+        exploration_config(
+            frontier_blacklist_radius=0.1,
+            frontier_failure_penalty=10.0,
+        )
+    )
+    initial_fog = np.zeros_like(explored)
+    initial_fog[4, 4] = True
+    initial_masks = masks(explored, initial_fog)
+    assert explorer.choose_target(initial_masks, player) == Point(0.25, 0.5)
+    for _ in range(3):
+        assert not explorer.record_progress(player, initial_masks)
+
+    equivalent_fog = np.zeros_like(explored)
+    equivalent_fog[4, 7] = True
+    equivalent_fog[4, 13] = True
+    target = explorer.choose_target(masks(explored, equivalent_fog), player)
+
+    assert target == Point(0.6, 0.5)
+
+
 def test_revealed_area_counts_as_progress_without_player_motion() -> None:
     explored = np.zeros((7, 7), dtype=np.bool_)
     explored[3, 1:6] = True
@@ -164,7 +189,7 @@ def test_movement_actions_allow_diagonal_wasd_and_clamp_pulses() -> None:
     assert all(action.duration_s == 0.15 for action in actions)
 
 
-def test_movement_action_returns_no_keys_for_same_position() -> None:
+def test_movement_action_safely_returns_no_keys_for_zero_vector() -> None:
     explorer = FrontierExplorer(exploration_config())
 
     assert explorer.movement_action(Point(0.5, 0.5), Point(0.5, 0.5)) == ()

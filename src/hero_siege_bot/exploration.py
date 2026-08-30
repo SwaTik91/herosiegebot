@@ -133,15 +133,7 @@ class FrontierExplorer:
 
             revealable = self._revealable_fog(labels == label, masks.fog)
             path_length = int(distances[rows[candidate_index], columns[candidate_index]])
-            failure_penalty = sum(
-                max(
-                    0.0,
-                    1.0
-                    - self._point_distance(candidate, failed)
-                    / self._config.frontier_blacklist_radius,
-                )
-                for failed in self._failed_targets
-            )
+            failure_penalty = self._failure_penalty(candidate)
             score = (
                 self._config.frontier_reveal_weight * revealable
                 - self._config.frontier_path_weight * path_length
@@ -191,6 +183,7 @@ class FrontierExplorer:
         return False
 
     def movement_action(self, player: Point, target: Point) -> tuple[Action, ...]:
+        """Return one or two bounded WASD actions, or none for a zero vector."""
         pulse = min(
             self._config.movement_pulse_s,
             self._config.max_movement_pulse_s,
@@ -258,6 +251,16 @@ class FrontierExplorer:
         return any(
             self._point_distance(point, failed)
             <= self._config.frontier_blacklist_radius
+            for failed in self._failed_targets
+        )
+
+    def _failure_penalty(self, point: Point) -> float:
+        influence_radius = self._config.frontier_blacklist_radius * 2.0
+        return sum(
+            max(
+                0.0,
+                1.0 - self._point_distance(point, failed) / influence_radius,
+            )
             for failed in self._failed_targets
         )
 
