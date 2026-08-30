@@ -102,6 +102,7 @@ class BotRuntime:
         detection_confidence: float,
         state_machine: BotStateMachine | None = None,
         state_reporter: Callable[[BotState], None] | None = None,
+        calibration_reporter: Callable[[str], None] | None = None,
     ) -> None:
         if not 0.0 <= calibration_confidence <= 1.0:
             raise ValueError("calibration_confidence must be between 0.0 and 1.0")
@@ -138,13 +139,33 @@ class BotRuntime:
         self._combat_suppression: _CombatSuppression | None = None
         self._state_reporter = state_reporter
         self._last_reported_state: BotState | None = None
+        self._calibration_reporter = calibration_reporter
+        self._last_reported_calibration_diagnostic: str | None = None
 
     def step(self) -> BotState:
         state = self._step()
+        if state is BotState.CALIBRATING:
+            self._report_state(state)
+            self._report_calibration_diagnostic()
+        else:
+            self._report_calibration_diagnostic()
+            self._report_state(state)
+        return state
+
+    def _report_state(self, state: BotState) -> None:
         if self._state_reporter is not None and state is not self._last_reported_state:
             self._state_reporter(state)
             self._last_reported_state = state
-        return state
+
+    def _report_calibration_diagnostic(self) -> None:
+        diagnostic = getattr(self.calibrator, "last_diagnostic", None)
+        if (
+            self._calibration_reporter is not None
+            and isinstance(diagnostic, str)
+            and diagnostic != self._last_reported_calibration_diagnostic
+        ):
+            self._calibration_reporter(diagnostic)
+            self._last_reported_calibration_diagnostic = diagnostic
 
     def _step(self) -> BotState:
         try:

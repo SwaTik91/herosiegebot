@@ -91,6 +91,12 @@ class CalibratorFake:
         return self.result
 
 
+class DiagnosticCalibratorFake(CalibratorFake):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_diagnostic: str | None = None
+
+
 class PerceptionFake:
     def __init__(self) -> None:
         self.observations: list[Observation] = [observation()]
@@ -265,12 +271,62 @@ def test_runtime_reports_initial_state_and_changes_without_repeating(
     ]
 
 
+def test_runtime_reports_changed_calibration_diagnostic_once(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    calibrator = DiagnosticCalibratorFake()
+    runtime_parts["calibrator"] = calibrator
+    calibrator.result = None
+    calibrator.last_diagnostic = "waiting for 3 stable frames (1/3)"
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.CALIBRATING
+    assert runtime.step() is BotState.CALIBRATING
+    calibrator.last_diagnostic = "waiting for 3 stable frames (2/3)"
+    assert runtime.step() is BotState.CALIBRATING
+    assert runtime.step() is BotState.CALIBRATING
+
+    assert reported == [
+        "waiting for 3 stable frames (1/3)",
+        "waiting for 3 stable frames (2/3)",
+    ]
+
+
+def test_calibration_reporter_accepts_calibrator_without_diagnostic(
+    runtime_parts: dict[str, object],
+) -> None:
+    reported: list[str] = []
+    runtime_parts["calibration_reporter"] = reported.append
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.EXPLORING
+    assert reported == []
+
+
 def test_cli_console_status_is_concise_and_uppercase(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cli._print_state(BotState.CALIBRATING)
 
     assert capsys.readouterr().out == "CALIBRATING\n"
+
+
+def test_cli_console_reports_calibration_progress_between_states(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cli._print_state(BotState.CALIBRATING)
+    cli._print_calibration_diagnostic("waiting for 3 stable frames (2/3)")
+    cli._print_calibration_diagnostic("calibrated with proportional geometry")
+    cli._print_state(BotState.EXPLORING)
+
+    assert capsys.readouterr().out == (
+        "CALIBRATING\n"
+        "calibration: waiting for 3 stable frames (2/3)\n"
+        "calibration: calibrated with proportional geometry\n"
+        "EXPLORING\n"
+    )
 
 
 def test_focus_loss_precedes_simultaneous_geometry_change(

@@ -56,6 +56,10 @@ def _print_state(state: BotState) -> None:
     print(state.name, flush=True)
 
 
+def _print_calibration_diagnostic(message: str) -> None:
+    print(f"calibration: {message}", flush=True)
+
+
 def _load_calibrator(config: BotConfig) -> AutoCalibrator:
     anchor_dir = Path(__file__).with_name("assets") / "anchors"
     anchors: dict[str, NDArray[np.uint8]] = {}
@@ -258,6 +262,7 @@ def build_runtime(
         movement_pulse_s=config.exploration.movement_pulse_s,
         detection_confidence=config.combat.detection_confidence,
         state_reporter=_print_state,
+        calibration_reporter=_print_calibration_diagnostic,
     )
 
 

@@ -401,6 +401,25 @@ def test_proportional_fallback_requires_three_frames(count: int) -> None:
     assert result is None
 
 
+def test_diagnostic_reports_stable_frame_progress() -> None:
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(_captured_frames(BOREAL_IMAGE, count=2))
+
+    assert result is None
+    assert calibrator.last_diagnostic == "waiting for 3 stable frames (2/3)"
+
+
+def test_diagnostic_reports_proportional_calibration() -> None:
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(_captured_frames(BOREAL_IMAGE, count=3))
+
+    assert result is not None
+    assert result.method == "proportional"
+    assert calibrator.last_diagnostic == "calibrated with proportional geometry"
+
+
 @pytest.mark.parametrize(
     "change",
     ["focus", "image_shape", "client_position", "client_size"],
@@ -438,9 +457,15 @@ def test_proportional_fallback_rejects_unstable_capture_geometry(
         timestamp=middle.timestamp,
     )
 
-    result = _calibrator_with_proportional_fallback().calibrate(frames)
+    calibrator = _calibrator_with_proportional_fallback()
+    result = calibrator.calibrate(frames)
 
     assert result is None
+    assert calibrator.last_diagnostic == (
+        "waiting for stable focused frames"
+        if change == "focus"
+        else "waiting for stable capture geometry"
+    )
 
 
 def test_strict_profile_wins_when_fallback_is_configured() -> None:
@@ -478,6 +503,7 @@ def test_strict_profile_wins_when_fallback_is_configured() -> None:
     assert result is not None
     assert result.method == "template"
     assert set(result.regions) == {"health", "minimap"}
+    assert calibrator.last_diagnostic == "calibrated with template anchors"
 
 
 def test_calibrates_scaled_hud_and_minimap_regions_across_three_frames() -> None:

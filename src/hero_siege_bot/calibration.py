@@ -120,6 +120,11 @@ class AutoCalibrator:
             else None
         )
         self._fallback_confidence = fallback_confidence
+        self._last_diagnostic: str | None = None
+
+    @property
+    def last_diagnostic(self) -> str | None:
+        return self._last_diagnostic
 
     @classmethod
     def _prepare_profile(cls, profile: CalibrationProfile) -> _Profile:
@@ -243,6 +248,9 @@ class AutoCalibrator:
     def calibrate(self, frames: Sequence[CapturedFrame]) -> Calibration | None:
         required = max(3, self._config.min_stable_frames)
         if len(frames) < required:
+            self._last_diagnostic = (
+                f"waiting for {required} stable frames ({len(frames)}/{required})"
+            )
             return None
 
         candidates: list[Calibration] = []
@@ -273,7 +281,9 @@ class AutoCalibrator:
             default=None,
         )
         if template is not None:
+            self._last_diagnostic = "calibrated with template anchors"
             return template
+        self._last_diagnostic = "waiting for stable calibration geometry"
         return self._build_fallback(frames[-required:])
 
     def _build_fallback(
@@ -282,12 +292,15 @@ class AutoCalibrator:
         if self._fallback_regions is None or not frames:
             return None
         if any(not frame.focused for frame in frames):
+            self._last_diagnostic = "waiting for stable focused frames"
             return None
         first_shape = frames[0].image.shape[:2]
         first_client_rect = frames[0].client_rect
         if any(frame.image.shape[:2] != first_shape for frame in frames[1:]):
+            self._last_diagnostic = "waiting for stable capture geometry"
             return None
         if any(frame.client_rect != first_client_rect for frame in frames[1:]):
+            self._last_diagnostic = "waiting for stable capture geometry"
             return None
 
         frame_height, frame_width = first_shape
@@ -304,12 +317,14 @@ class AutoCalibrator:
             )
             for name, region in self._fallback_regions.items()
         }
-        return Calibration(
+        calibration = Calibration(
             regions=MappingProxyType(regions),
             scale=1.0,
             confidence=self._fallback_confidence,
             method="proportional",
         )
+        self._last_diagnostic = "calibrated with proportional geometry"
+        return calibration
 
     def _build(
         self,
