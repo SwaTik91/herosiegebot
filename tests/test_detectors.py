@@ -10,8 +10,10 @@ from hero_siege_bot.detectors import (
     MotionColorDetector,
     ScreenStateDetector,
     TemplateDetector,
+    YoloBox,
+    YoloDetector,
 )
-from hero_siege_bot.domain import normalize_pixel_index
+from hero_siege_bot.domain import Rect, normalize_pixel_index
 
 
 def test_normalized_pixel_coordinates_are_edge_inclusive_with_single_pixel_guard() -> None:
@@ -152,3 +154,42 @@ def test_screen_state_detector_finds_generated_death_and_restart_templates() -> 
     detections = detector.detect(image)
 
     assert {detection.kind for detection in detections} == {"death", "restart"}
+
+
+class _FakeYoloBackend:
+    def __init__(self, boxes: tuple[YoloBox, ...]) -> None:
+        self.boxes = boxes
+        self.images: list[NDArray[np.uint8]] = []
+
+    def predict(self, image: NDArray[np.uint8]) -> tuple[YoloBox, ...]:
+        self.images.append(image)
+        return self.boxes
+
+
+def test_yolo_detector_maps_backend_boxes_to_normalized_detections() -> None:
+    backend = _FakeYoloBackend(
+        (
+            YoloBox("enemy", 10, 20, 30, 40, 0.91),
+            YoloBox("loot", 80, 5, 90, 15, 0.44),
+        )
+    )
+    detector = YoloDetector(backend, confidence_threshold=0.35)
+    image = np.zeros((50, 100, 3), dtype=np.uint8)
+
+    detections = detector.detect(image)
+
+    assert [item.kind for item in detections] == ["enemy", "loot"]
+    assert detections[0].center.x == pytest.approx(19.5 / 99)
+    assert detections[0].center.y == pytest.approx(29.5 / 49)
+    assert detections[0].confidence == pytest.approx(0.91)
+    assert detections[0].bbox == Rect(10, 20, 20, 20)
+    assert detections[1].bbox == Rect(80, 5, 10, 10)
+    assert backend.images[0] is image
+
+
+def test_yolo_detector_drops_boxes_below_confidence() -> None:
+    backend = _FakeYoloBackend((YoloBox("enemy", 0, 0, 8, 8, 0.2),))
+    detector = YoloDetector(backend, confidence_threshold=0.35)
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    assert detector.detect(image) == ()

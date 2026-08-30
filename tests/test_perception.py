@@ -15,7 +15,7 @@ from hero_siege_bot.detectors import (
     ScreenStateDetector,
     TemplateDetector,
 )
-from hero_siege_bot.domain import Detection, Rect
+from hero_siege_bot.domain import Detection, Point, Rect
 from hero_siege_bot.exploration import segment_minimap
 from hero_siege_bot.perception import Perception
 
@@ -80,7 +80,7 @@ def _calibration(**regions: Rect) -> Calibration:
     return Calibration(regions=defaults, scale=1.0, confidence=0.97)
 
 
-def _perception() -> Perception:
+def _perception(*, yolo_detector: object | None = None) -> Perception:
     config = load_config(Path("config/default.yaml"))
     return Perception(
         config=config,
@@ -102,6 +102,7 @@ def _perception() -> Perception:
             confidence_threshold=0.99,
             nms_iou_threshold=0.3,
         ),
+        yolo_detector=yolo_detector,
     )
 
 
@@ -144,6 +145,34 @@ def test_perception_composes_calibrated_crops_into_immutable_observation() -> No
     np.testing.assert_array_equal(
         observation.map_masks.walkable, expected_masks.walkable
     )
+    assert observation.yolo == ()
+
+
+class _FullFrameYolo:
+    def detect(self, image: NDArray[np.uint8]) -> tuple[Detection, ...]:
+        height, width = image.shape[:2]
+        return (
+            Detection(
+                "vein",
+                Point(10 / max(width - 1, 1), 8 / max(height - 1, 1)),
+                0.93,
+                bbox=Rect(5, 4, 12, 8),
+            ),
+        )
+
+
+def test_perception_keeps_yolo_on_full_frame_out_of_combat_slots() -> None:
+    perception = _perception(yolo_detector=_FullFrameYolo())
+    perception.observe(_frame(_image(enemy_left=5, marker_left=3)), _calibration())
+    observation = perception.observe(
+        _frame(_image(enemy_left=35, marker_left=24)),
+        _calibration(),
+    )
+
+    assert [item.kind for item in observation.yolo] == ["vein"]
+    assert observation.yolo[0].bbox == Rect(5, 4, 12, 8)
+    assert len(observation.enemies) == 1
+    assert observation.enemies[0].kind == "enemy"
 
 
 @pytest.mark.parametrize(

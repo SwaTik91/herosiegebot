@@ -151,9 +151,9 @@ class ExplorationConfig:
     max_movement_pulse_s: float
     stuck_timeout_s: float
     fog_hsv_lower: tuple[int, int, int] = (0, 0, 0)
-    fog_hsv_upper: tuple[int, int, int] = (179, 255, 45)
-    explored_hsv_lower: tuple[int, int, int] = (0, 0, 140)
-    explored_hsv_upper: tuple[int, int, int] = (179, 120, 255)
+    fog_hsv_upper: tuple[int, int, int] = (179, 255, 28)
+    explored_hsv_lower: tuple[int, int, int] = (0, 0, 28)
+    explored_hsv_upper: tuple[int, int, int] = (179, 255, 255)
     morphology_kernel_size: int = 3
     morphology_iterations: int = 1
     frontier_reveal_radius: int = 4
@@ -212,6 +212,23 @@ class ExplorationConfig:
 
 
 @dataclass(frozen=True)
+class YoloConfig:
+    enabled: bool
+    observe_only: bool
+    weights: str
+    confidence: float
+    imgsz: int
+    device: str
+
+    def __post_init__(self) -> None:
+        _ratio("yolo.confidence", self.confidence)
+        if self.imgsz <= 0:
+            raise ValueError("yolo.imgsz must be positive")
+        if not self.weights.strip():
+            raise ValueError("yolo.weights must not be empty")
+
+
+@dataclass(frozen=True)
 class RecordingConfig:
     enabled: bool
     overlay: bool
@@ -231,6 +248,7 @@ class BotConfig:
     detectors: DetectorConfig
     exploration: ExplorationConfig
     recording: RecordingConfig
+    yolo: YoloConfig
 
 
 _DEFAULTS: dict[str, object] = {
@@ -281,9 +299,9 @@ _DEFAULTS: dict[str, object] = {
         "max_movement_pulse_s": 0.3,
         "stuck_timeout_s": 1.5,
         "fog_hsv_lower": [0, 0, 0],
-        "fog_hsv_upper": [179, 255, 45],
-        "explored_hsv_lower": [0, 0, 140],
-        "explored_hsv_upper": [179, 120, 255],
+        "fog_hsv_upper": [179, 255, 28],
+        "explored_hsv_lower": [0, 0, 28],
+        "explored_hsv_upper": [179, 255, 255],
         "morphology_kernel_size": 3,
         "morphology_iterations": 1,
         "frontier_reveal_radius": 4,
@@ -296,6 +314,14 @@ _DEFAULTS: dict[str, object] = {
         "no_progress_sample_limit": 3,
     },
     "recording": {"enabled": True, "overlay": True, "frame_interval_s": 1.0},
+    "yolo": {
+        "enabled": True,
+        "observe_only": True,
+        "weights": "models/hero-siege-yolo11n-user-v1.pt",
+        "confidence": 0.35,
+        "imgsz": 1280,
+        "device": "auto",
+    },
 }
 
 
@@ -387,6 +413,7 @@ def load_config(path: Path) -> BotConfig:
     detectors = sections["detectors"]
     exploration = sections["exploration"]
     recording = sections["recording"]
+    yolo = sections["yolo"]
 
     movement = _mapping(controls["movement"], "movement")
     cooldowns = _mapping(combat["skill_cooldowns_s"], "skill_cooldowns_s")
@@ -482,5 +509,13 @@ def load_config(path: Path) -> BotConfig:
             enabled=_bool(recording, "enabled"),
             overlay=_bool(recording, "overlay"),
             frame_interval_s=_float(recording, "frame_interval_s"),
+        ),
+        yolo=YoloConfig(
+            enabled=_bool(yolo, "enabled"),
+            observe_only=_bool(yolo, "observe_only"),
+            weights=str(yolo["weights"]),
+            confidence=_float(yolo, "confidence"),
+            imgsz=_int(yolo, "imgsz"),
+            device=str(yolo["device"]),
         ),
     )

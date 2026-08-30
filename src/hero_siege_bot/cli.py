@@ -21,7 +21,12 @@ from hero_siege_bot.calibration import (
 from hero_siege_bot.capture import WindowCapture
 from hero_siege_bot.config import BotConfig, load_config
 from hero_siege_bot.controllers import CombatController, LootController, SurvivalController
-from hero_siege_bot.detectors import ScreenStateDetector, TemplateDetector
+from hero_siege_bot.detectors import (
+    ScreenStateDetector,
+    TemplateDetector,
+    UltralyticsYoloBackend,
+    YoloDetector,
+)
 from hero_siege_bot.diagnostics import DiagnosticsOverlay, JsonlRecorder
 from hero_siege_bot.domain import BotState
 from hero_siege_bot.exploration import FrontierExplorer
@@ -195,6 +200,31 @@ def _load_template(name: str) -> NDArray[np.uint8]:
     return np.asarray(image, dtype=np.uint8)
 
 
+def _load_yolo_detector(config: BotConfig) -> YoloDetector | None:
+    yolo = config.yolo
+    if not yolo.enabled:
+        return None
+    if not yolo.observe_only:
+        _abort("YOLO combat control is not enabled yet; keep yolo.observe_only: true")
+    weights = Path(yolo.weights)
+    if not weights.is_file():
+        print(f"YOLO overlay skipped: weights not found at {weights}", flush=True)
+        return None
+    try:
+        backend = UltralyticsYoloBackend(
+            weights, imgsz=yolo.imgsz, device=yolo.device
+        )
+    except ImportError:
+        print(
+            "YOLO overlay skipped: install ultralytics "
+            "(pip install 'hero-siege-bot[yolo]')",
+            flush=True,
+        )
+        return None
+    print(f"YOLO overlay enabled: {weights}", flush=True)
+    return YoloDetector(backend, confidence_threshold=yolo.confidence)
+
+
 def _build_recorder(
     config: BotConfig, diagnostics_root: Path
 ) -> JsonlRecorder | None:
@@ -239,6 +269,7 @@ def build_runtime(
         enemy_detector=enemy_detector,
         loot_detector=loot_detector,
         screen_state_detector=screen_state_detector,
+        yolo_detector=_load_yolo_detector(config),
     )
     recorder = _build_recorder(config, diagnostics_root)
     safe_input = SafeInput(

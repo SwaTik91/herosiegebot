@@ -53,6 +53,62 @@ def test_segment_minimap_classifies_synthetic_room_and_corridor_exactly() -> Non
     np.testing.assert_array_equal(result.walkable, expected_explored)
 
 
+def test_segment_minimap_fills_outlined_rooms_and_keeps_border_dark_as_fog() -> None:
+    image = np.full((11, 11, 3), 10, dtype=np.uint8)
+    image[2:9, 2] = (200, 200, 200)
+    image[2:9, 8] = (200, 200, 200)
+    image[2, 2:9] = (200, 200, 200)
+    image[8, 2:9] = (200, 200, 200)
+    expected_explored = np.zeros((11, 11), dtype=np.bool_)
+    expected_explored[2:9, 2:9] = True
+
+    result = segment_minimap(image, exploration_config())
+
+    np.testing.assert_array_equal(result.explored, expected_explored)
+    np.testing.assert_array_equal(result.fog, ~expected_explored)
+    expected_walkable = np.zeros((11, 11), dtype=np.bool_)
+    expected_walkable[3:8, 3:8] = True
+    np.testing.assert_array_equal(result.walkable, expected_walkable)
+
+
+def test_frontier_uses_openings_not_pixels_behind_walls() -> None:
+    image = np.full((11, 11, 3), 10, dtype=np.uint8)
+    image[2:9, 2] = (200, 200, 200)
+    image[2:9, 8] = (200, 200, 200)
+    image[2, 2:9] = (200, 200, 200)
+    image[8, 2:9] = (200, 200, 200)
+    image[5, 8] = (10, 10, 10)
+    result = segment_minimap(image, exploration_config())
+    explorer = FrontierExplorer(exploration_config())
+
+    target = explorer.choose_target(result, Point(0.5, 0.5))
+    frontier = explorer.frontier_mask(result)
+
+    assert target is not None
+    assert not frontier[5, 2]
+    target_col = round(target.x * (result.walkable.shape[1] - 1))
+    assert target_col >= 6
+
+
+def test_choose_target_finds_frontier_on_real_highland_minimap() -> None:
+    image = cv2.imread("tests/fixtures/frames/highland_graveyard_1024x655.png")
+    assert image is not None
+    minimap = image[0:143, 898:1024]
+    result = segment_minimap(minimap, exploration_config(
+        explored_hsv_lower=(0, 0, 28),
+        explored_hsv_upper=(179, 255, 255),
+        morphology_kernel_size=3,
+        morphology_iterations=1,
+    ))
+    explorer = FrontierExplorer(exploration_config())
+
+    target = explorer.choose_target(result, Point(0.5, 0.5))
+
+    assert int(np.count_nonzero(result.explored)) > 1000
+    assert int(np.count_nonzero(result.fog)) > 1000
+    assert target is not None
+
+
 def test_segment_minimap_applies_configured_open_and_close_morphology() -> None:
     image = np.full((11, 11, 3), 10, dtype=np.uint8)
     image[3:8, 3:8] = (220, 220, 220)
@@ -171,7 +227,7 @@ def test_recent_failure_penalty_ranks_down_nearby_reachable_frontier() -> None:
     initial_fog = np.zeros_like(explored)
     initial_fog[4, 4] = True
     initial_masks = masks(explored, initial_fog)
-    assert explorer.choose_target(initial_masks, player) == Point(0.25, 0.5)
+    assert explorer.choose_target(initial_masks, player) == Point(0.2, 0.5)
     for _ in range(3):
         assert not explorer.record_progress(player, initial_masks)
 
@@ -180,7 +236,7 @@ def test_recent_failure_penalty_ranks_down_nearby_reachable_frontier() -> None:
     equivalent_fog[4, 13] = True
     target = explorer.choose_target(masks(explored, equivalent_fog), player)
 
-    assert target == Point(0.6, 0.5)
+    assert target == Point(0.65, 0.5)
 
 
 def test_revealed_area_counts_as_progress_without_player_motion() -> None:
@@ -196,6 +252,60 @@ def test_revealed_area_counts_as_progress_without_player_motion() -> None:
     revealed[2, 1] = True
 
     assert explorer.record_progress(player, masks(revealed, fog & ~revealed))
+
+
+def test_movement_follows_walkable_path_around_corner_instead_of_into_wall() -> None:
+    walkable = np.zeros((11, 11), dtype=np.bool_)
+    walkable[2, 2:9] = True
+    walkable[2:9, 2:5] = True
+    explorer = FrontierExplorer(exploration_config())
+
+    actions = explorer.movement_action(
+        Point(0.8, 0.2),
+        Point(0.3, 0.8),
+        walkable,
+    )
+
+    assert tuple(action.key for action in actions) == ("A",)
+    assert all(action.duration_s == 0.15 for action in actions)
+
+
+def test_movement_steps_into_adjacent_fog_when_already_on_target() -> None:
+    walkable = np.zeros((11, 11), dtype=np.bool_)
+    walkable[2, 2:9] = True
+    fog = np.zeros((11, 11), dtype=np.bool_)
+    fog[2, 9] = True
+    explorer = FrontierExplorer(exploration_config())
+    here = Point(0.8, 0.2)
+
+    actions = explorer.movement_action(here, here, walkable, fog)
+
+    assert tuple(action.key for action in actions) == ("D",)
+
+
+def test_stale_interior_target_is_not_treated_as_frontier() -> None:
+    walkable = np.zeros((11, 11), dtype=np.bool_)
+    walkable[3:8, 3:8] = True
+    fog = np.zeros((11, 11), dtype=np.bool_)
+    fog[2, 5] = True
+    explorer = FrontierExplorer(exploration_config())
+    map_masks = masks(walkable, fog, walkable)
+
+    assert explorer.target_is_valid(map_masks, Point(0.5, 0.3))
+    assert not explorer.target_is_valid(map_masks, Point(0.5, 0.5))
+
+
+def test_movement_walks_toward_nearest_fog_when_standing_inside_room() -> None:
+    walkable = np.zeros((11, 11), dtype=np.bool_)
+    walkable[3:8, 3:8] = True
+    fog = np.zeros((11, 11), dtype=np.bool_)
+    fog[0, 5] = True
+    explorer = FrontierExplorer(exploration_config())
+    here = Point(0.5, 0.5)
+
+    actions = explorer.movement_action(here, here, walkable, fog)
+
+    assert tuple(action.key for action in actions) == ("W",)
 
 
 def test_movement_actions_allow_diagonal_wasd_and_clamp_pulses() -> None:

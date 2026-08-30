@@ -2,6 +2,7 @@
 .superpowers/
 .DS_Store
 .venv/
+.venv-yolo/
 __pycache__/
 .pytest_cache/
 .coverage
@@ -12,3 +13,17 @@ __pycache__/
 artifacts/
 dist/
 release/
+runs/
+yolo11n.pt
+datasets/screenshot-batches/
+datasets/user-screenshots/raw/
+datasets/user-screenshots/preview/
+datasets/user-screenshots/draft-labels/
+datasets/user-screenshots/draft-preview/
+datasets/user-screenshots/ocr-cache.json
+datasets/user-screenshots/contact_sheet.jpg
+datasets/user-screenshots/labeled_contact_sheet.jpg
+datasets/user-screenshots/images/
+datasets/hero-siege-roboflow-v3/
+datasets/hero-siege-roboflow-v3.zip
+*.cache

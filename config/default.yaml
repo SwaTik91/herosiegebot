@@ -53,9 +53,9 @@ exploration:
   max_movement_pulse_s: 0.3
   stuck_timeout_s: 1.5
   fog_hsv_lower: [0, 0, 0]
-  fog_hsv_upper: [179, 255, 45]
-  explored_hsv_lower: [0, 0, 140]
-  explored_hsv_upper: [179, 120, 255]
+  fog_hsv_upper: [179, 255, 28]
+  explored_hsv_lower: [0, 0, 28]
+  explored_hsv_upper: [179, 255, 255]
   morphology_kernel_size: 3
   morphology_iterations: 1
   frontier_reveal_radius: 4
@@ -71,3 +71,11 @@ recording:
   enabled: true
   overlay: true
   frame_interval_s: 1.0
+
+yolo:
+  enabled: true
+  observe_only: true
+  weights: models/hero-siege-yolo11n-user-v1.pt
+  confidence: 0.35
+  imgsz: 1280
+  device: auto

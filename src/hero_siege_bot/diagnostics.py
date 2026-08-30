@@ -51,6 +51,8 @@ class DiagnosticsOverlay:
             self._marker(rendered, gameplay, detection.center, (0, 0, 255), "enemy")
         for detection in observation.loot:
             self._marker(rendered, gameplay, detection.center, (0, 255, 255), "loot")
+        for detection in observation.yolo:
+            self._yolo_box(rendered, detection)
 
         minimap = calibration.regions.get("minimap")
         if minimap is not None:
@@ -68,7 +70,8 @@ class DiagnosticsOverlay:
             f"calibration={observation.calibration_confidence:.2f}",
             (
                 f"enemy={self._best_confidence(observation.enemies):.2f} "
-                f"loot={self._best_confidence(observation.loot):.2f}"
+                f"loot={self._best_confidence(observation.loot):.2f} "
+                f"yolo={len(observation.yolo)}"
             ),
             f"actions={action_text}",
         )
@@ -84,6 +87,36 @@ class DiagnosticsOverlay:
                 cv2.LINE_AA,
             )
         return rendered
+
+    _YOLO_COLORS = {
+        "player": (0, 255, 0),
+        "companion": (255, 180, 0),
+        "enemy": (0, 0, 255),
+        "loot": (0, 255, 255),
+        "vein": (0, 215, 255),
+        "chest": (180, 105, 255),
+        "stash": (255, 0, 255),
+        "waypoint": (255, 255, 0),
+    }
+
+    def _yolo_box(self, image: NDArray[np.uint8], detection: Detection) -> None:
+        color = self._YOLO_COLORS.get(detection.kind, (200, 200, 200))
+        box = detection.bbox
+        if box is None:
+            gameplay = Rect(0, 0, image.shape[1], image.shape[0])
+            self._marker(image, gameplay, detection.center, color, detection.kind)
+            return
+        self._rectangle(image, box, color)
+        cv2.putText(
+            image,
+            f"{detection.kind} {detection.confidence:.2f}",
+            (box.x, max(10, box.y - 3)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
 
     @staticmethod
     def _rectangle(
@@ -204,6 +237,7 @@ class JsonlRecorder:
             "player_map_position": self._point(observation.player_map_position),
             "enemies": [asdict(item) for item in observation.enemies],
             "loot": [asdict(item) for item in observation.loot],
+            "yolo": [asdict(item) for item in observation.yolo],
             "dead": observation.dead,
             "restart_visible": observation.restart_visible,
             "restart_target": self._point(observation.restart_target),

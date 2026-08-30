@@ -47,7 +47,7 @@ def segment_minimap(
         (config.morphology_kernel_size, config.morphology_kernel_size),
         dtype=np.uint8,
     )
-    explored = _clean_mask(
+    structure = _clean_mask(
         cast(
             NDArray[np.uint8],
             cv2.inRange(
@@ -60,7 +60,7 @@ def segment_minimap(
         config.morphology_iterations,
         0,
     )
-    fog = _clean_mask(
+    fog_seed = _clean_mask(
         cast(
             NDArray[np.uint8],
             cv2.inRange(
@@ -73,8 +73,44 @@ def segment_minimap(
         config.morphology_iterations,
         255,
     )
-    fog &= ~explored
-    return MapMasks(explored=explored, fog=fog, walkable=explored.copy())
+    sealed = cv2.dilate(structure.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(
+        np.bool_
+    )
+    inner = (~sealed) & ~_border_connected(~sealed)
+    grown = inner | (
+        cv2.dilate(inner.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(np.bool_)
+        & ~structure
+    )
+    openings = _four_adjacent(grown) & ~structure
+    interiors = grown | openings
+    explored = structure | interiors
+    fog = fog_seed & ~explored
+    walkable = interiors.copy()
+    if not walkable.any():
+        walkable = structure.copy()
+    return MapMasks(explored=explored, fog=fog, walkable=walkable)
+
+
+def _border_connected(mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    if not mask.any():
+        return np.zeros(mask.shape, dtype=np.bool_)
+    _, labels = cv2.connectedComponents(mask.astype(np.uint8), connectivity=8)
+    border = np.unique(
+        np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1]))
+    )
+    border = border[border != 0]
+    if border.size == 0:
+        return np.zeros(mask.shape, dtype=np.bool_)
+    return np.isin(labels, border)
+
+
+def _four_adjacent(mask: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    adjacent = np.zeros(mask.shape, dtype=np.bool_)
+    adjacent[1:, :] |= mask[:-1, :]
+    adjacent[:-1, :] |= mask[1:, :]
+    adjacent[:, 1:] |= mask[:, :-1]
+    adjacent[:, :-1] |= mask[:, 1:]
+    return adjacent
 
 
 class FrontierExplorer:
@@ -87,11 +123,14 @@ class FrontierExplorer:
         self._failed_targets: list[Point] = []
 
     def frontier_mask(self, masks: MapMasks) -> NDArray[np.bool_]:
-        adjacent_fog = cv2.dilate(
-            masks.fog.astype(np.uint8),
-            np.ones((3, 3), dtype=np.uint8),
-        ).astype(np.bool_)
-        return masks.explored & masks.walkable & adjacent_fog
+        return masks.walkable & _four_adjacent(masks.fog)
+
+    def target_is_valid(self, masks: MapMasks, target: Point) -> bool:
+        frontier = self.frontier_mask(masks)
+        height, width = frontier.shape
+        column = min(width - 1, max(0, round(target.x * (width - 1))))
+        row = min(height - 1, max(0, round(target.y * (height - 1))))
+        return bool(frontier[row, column])
 
     def choose_target(self, masks: MapMasks, player: Point) -> Point | None:
         distances = self._reachable_distances(masks.walkable, player)
@@ -172,15 +211,34 @@ class FrontierExplorer:
             self._current_target = None
         self._no_progress_samples = 0
 
-    def movement_action(self, player: Point, target: Point) -> tuple[Action, ...]:
+    def movement_action(
+        self,
+        player: Point,
+        target: Point,
+        walkable: NDArray[np.bool_] | None = None,
+        fog: NDArray[np.bool_] | None = None,
+    ) -> tuple[Action, ...]:
         """Return one or two bounded WASD actions, or none for a zero vector."""
+        aim = target
+        if walkable is not None:
+            waypoint = self._first_path_step(walkable, player, target)
+            if waypoint is not None:
+                aim = waypoint
+            elif fog is not None:
+                into_fog = self._adjacent_fog_step(walkable, fog, player)
+                if into_fog is not None:
+                    aim = into_fog
+                else:
+                    nearest_fog = self._nearest_mask_point(fog, player)
+                    if nearest_fog is not None:
+                        aim = nearest_fog
         pulse = min(
             self._config.movement_pulse_s,
             self._config.max_movement_pulse_s,
         )
         actions: list[Action] = []
-        delta_y = target.y - player.y
-        delta_x = target.x - player.x
+        delta_y = aim.y - player.y
+        delta_x = aim.x - player.x
         if delta_y < 0:
             actions.append(Action(kind="key_hold", key="W", duration_s=pulse))
         elif delta_y > 0:
@@ -191,6 +249,98 @@ class FrontierExplorer:
             actions.append(Action(kind="key_hold", key="D", duration_s=pulse))
         return tuple(actions)
 
+    def _first_path_step(
+        self,
+        walkable: NDArray[np.bool_],
+        player: Point,
+        target: Point,
+    ) -> Point | None:
+        start = self._snapped_cell(walkable, player)
+        goal = self._snapped_cell(walkable, target)
+        if start is None or goal is None or start == goal:
+            return None
+        parents = self._cardinal_parents(walkable, start)
+        if goal not in parents:
+            return None
+        step = goal
+        while parents[step] != start:
+            step = parents[step]
+        return self._normalized_point(step[0], step[1], walkable.shape)
+
+    def _adjacent_fog_step(
+        self,
+        walkable: NDArray[np.bool_],
+        fog: NDArray[np.bool_],
+        player: Point,
+    ) -> Point | None:
+        start = self._snapped_cell(walkable, player)
+        if start is None:
+            return None
+        height, width = fog.shape
+        row, column = start
+        for row_delta, column_delta in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            next_row = row + row_delta
+            next_column = column + column_delta
+            if (
+                0 <= next_row < height
+                and 0 <= next_column < width
+                and fog[next_row, next_column]
+            ):
+                return self._normalized_point(next_row, next_column, fog.shape)
+        return None
+
+    def _nearest_mask_point(
+        self, mask: NDArray[np.bool_], point: Point
+    ) -> Point | None:
+        if not mask.any():
+            return None
+        height, width = mask.shape
+        column = min(width - 1, max(0, round(point.x * (width - 1))))
+        row = min(height - 1, max(0, round(point.y * (height - 1))))
+        cells = np.argwhere(mask)
+        offset = cells - np.array((row, column))
+        nearest = cells[int(np.argmin(np.sum(offset * offset, axis=1)))]
+        return self._normalized_point(int(nearest[0]), int(nearest[1]), mask.shape)
+
+    def _snapped_cell(
+        self, walkable: NDArray[np.bool_], point: Point
+    ) -> tuple[int, int] | None:
+        height, width = walkable.shape
+        column = min(width - 1, max(0, round(point.x * (width - 1))))
+        row = min(height - 1, max(0, round(point.y * (height - 1))))
+        if walkable[row, column]:
+            return row, column
+        nearby = np.argwhere(walkable)
+        if nearby.size == 0:
+            return None
+        offset = nearby - np.array((row, column))
+        nearest = nearby[int(np.argmin(np.sum(offset * offset, axis=1)))]
+        return int(nearest[0]), int(nearest[1])
+
+    @staticmethod
+    def _cardinal_parents(
+        walkable: NDArray[np.bool_], start: tuple[int, int]
+    ) -> dict[tuple[int, int], tuple[int, int]]:
+        height, width = walkable.shape
+        parents: dict[tuple[int, int], tuple[int, int]] = {}
+        pending = deque([start])
+        seen = {start}
+        while pending:
+            row, column = pending.popleft()
+            for row_delta, column_delta in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                next_row = row + row_delta
+                next_column = column + column_delta
+                if (
+                    0 <= next_row < height
+                    and 0 <= next_column < width
+                    and walkable[next_row, next_column]
+                    and (next_row, next_column) not in seen
+                ):
+                    seen.add((next_row, next_column))
+                    parents[(next_row, next_column)] = (row, column)
+                    pending.append((next_row, next_column))
+        return parents
+
     def _reachable_distances(
         self, walkable: NDArray[np.bool_], player: Point
     ) -> NDArray[np.int32]:
@@ -199,7 +349,12 @@ class FrontierExplorer:
         start_row = min(height - 1, max(0, round(player.y * (height - 1))))
         distances = np.full(walkable.shape, -1, dtype=np.int32)
         if not walkable[start_row, start_column]:
-            return distances
+            nearby = np.argwhere(walkable)
+            if nearby.size == 0:
+                return distances
+            offset = nearby - np.array((start_row, start_column))
+            nearest = nearby[int(np.argmin(np.sum(offset * offset, axis=1)))]
+            start_row, start_column = int(nearest[0]), int(nearest[1])
 
         distances[start_row, start_column] = 0
         pending = deque([(start_row, start_column)])

@@ -48,12 +48,18 @@ class Explorer(Protocol):
     def choose_target(self, masks: MapMasks, player: Point) -> Point | None: ...
 
     def movement_action(
-        self, player: Point, target: Point
+        self,
+        player: Point,
+        target: Point,
+        walkable: object | None = None,
+        fog: object | None = None,
     ) -> tuple[Action, ...]: ...
 
     def record_progress(self, player: Point, masks: MapMasks) -> bool: ...
 
     def blacklist_current_target(self) -> None: ...
+
+    def target_is_valid(self, masks: MapMasks, target: Point) -> bool: ...
 
 
 class Controller(Protocol):
@@ -454,11 +460,18 @@ class BotRuntime:
         masks = observation.map_masks
         if player is None or masks is None:
             return ()
-        if self._target is None:
+        if self._target is None or not self.explorer.target_is_valid(
+            masks, self._target
+        ):
             self._target = self.explorer.choose_target(masks, player)
         if self._target is None:
-            return ()
-        actions = self.explorer.movement_action(player, self._target)
+            return self._roam()
+        actions = self.explorer.movement_action(
+            player, self._target, masks.walkable, masks.fog
+        )
+        if not actions:
+            self._target = None
+            return self._roam()
         movement = next(
             (
                 action.key
@@ -499,6 +512,15 @@ class BotRuntime:
         self._no_progress_samples = 0
         self._recovery_phase = 0
         return BotState.EXPLORING, (), False
+
+    def _roam(self) -> tuple[Action, ...]:
+        key = (
+            self._last_movement_key
+            if self._last_movement_key in {"W", "A", "S", "D"}
+            else "W"
+        )
+        self._last_movement_key = key
+        return self._pulse(key)
 
     def _pulse(self, key: str | None) -> tuple[Action, ...]:
         if key is None:

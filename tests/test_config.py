@@ -105,6 +105,14 @@ def test_default_config_uses_expected_controls() -> None:
     assert config.controls.emergency_stop == "CTRL+SHIFT+F10"
 
 
+def test_default_yolo_is_observe_only_with_user_weights() -> None:
+    config = load_config(Path("config/default.yaml"))
+    assert config.yolo.enabled is True
+    assert config.yolo.observe_only is True
+    assert config.yolo.weights == "models/hero-siege-yolo11n-user-v1.pt"
+    assert config.yolo.confidence == 0.35
+
+
 @pytest.mark.parametrize("contents", ["{}", "calibration: {}"])
 def test_default_calibration_supports_two_x_profile_scale(
     tmp_path: Path, contents: str

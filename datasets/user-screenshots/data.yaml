@@ -1,0 +1,5 @@
+path: .
+train: splits/train.txt
+val: splits/val.txt
+nc: 8
+names: ['player', 'companion', 'enemy', 'loot', 'vein', 'chest', 'stash', 'waypoint']

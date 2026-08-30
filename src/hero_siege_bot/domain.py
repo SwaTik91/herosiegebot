@@ -48,6 +48,7 @@ class Detection:
     kind: str
     center: Point
     confidence: float
+    bbox: Rect | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class Observation:
     movement_progress: float
     map_masks: MapMasks | None = None
     restart_target: Point | None = None
+    yolo: tuple[Detection, ...] = ()
 
 
 @dataclass(frozen=True)

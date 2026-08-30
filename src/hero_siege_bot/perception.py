@@ -25,6 +25,7 @@ class Perception:
         enemy_detector: Detector,
         loot_detector: Detector,
         screen_state_detector: Detector,
+        yolo_detector: Detector | None = None,
     ) -> None:
         self._config = config
         detector_config = config.detectors
@@ -45,6 +46,7 @@ class Perception:
         self._enemy_detector = enemy_detector
         self._loot_detector = loot_detector
         self._screen_state_detector = screen_state_detector
+        self._yolo_detector = yolo_detector
         self._previous_player: Point | None = None
 
     def observe(
@@ -90,6 +92,11 @@ class Perception:
             key=lambda detection: detection.confidence,
             default=None,
         )
+        yolo = (
+            self._yolo_detector.detect(frame.image)
+            if self._yolo_detector is not None
+            else ()
+        )
         return Observation(
             timestamp=frame.timestamp,
             calibrated=True,
@@ -105,6 +112,7 @@ class Perception:
             movement_progress=movement_progress,
             map_masks=map_masks,
             restart_target=restart.center if restart is not None else None,
+            yolo=yolo,
         )
 
     def _locate_player(self, minimap: NDArray[np.uint8]) -> Point | None:

@@ -130,13 +130,20 @@ class ExplorerFake:
         self.progress_calls = 0
         self.progressed = True
         self.progress_results: list[bool] = []
+        self.valid_target = True
 
     def choose_target(self, map_masks: MapMasks, player: Point) -> Point | None:
         del map_masks, player
         return self.target
 
-    def movement_action(self, player: Point, target: Point) -> tuple[Action, ...]:
-        del player, target
+    def movement_action(
+        self,
+        player: Point,
+        target: Point,
+        walkable: object | None = None,
+        fog: object | None = None,
+    ) -> tuple[Action, ...]:
+        del player, target, walkable, fog
         return (Action("key_hold", key="D", duration_s=0.1),)
 
     def record_progress(self, player: Point, map_masks: MapMasks) -> bool:
@@ -148,6 +155,10 @@ class ExplorerFake:
 
     def blacklist_current_target(self) -> None:
         self.blacklisted = True
+
+    def target_is_valid(self, map_masks: MapMasks, target: Point) -> bool:
+        del map_masks, target
+        return self.valid_target
 
 
 class ControllerFake:
@@ -669,6 +680,56 @@ def test_recovery_releases_then_pulses_orthogonal_and_reverse(
     explorer = runtime_parts["explorer"]
     assert isinstance(explorer, ExplorerFake)
     assert explorer.blacklisted
+
+
+def test_stale_frontier_target_is_refreshed_before_standing(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    explorer = runtime_parts["explorer"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(explorer, ExplorerFake)
+    assert isinstance(input_spy, InputSpy)
+    runtime.step()
+    explorer.target = Point(0.2, 0.2)
+    explorer.valid_target = False
+    seen: list[Point] = []
+
+    def movement(
+        player: Point,
+        target: Point,
+        walkable: object | None = None,
+        fog: object | None = None,
+    ) -> tuple[Action, ...]:
+        del player, walkable, fog
+        seen.append(target)
+        return (Action("key_hold", key="A", duration_s=0.1),)
+
+    explorer.movement_action = movement  # type: ignore[method-assign]
+
+    assert runtime.step() is BotState.EXPLORING
+    assert seen[-1] == Point(0.2, 0.2)
+    assert any(
+        action.key == "A"
+        for actions in input_spy.executed
+        for action in actions
+    )
+
+
+def test_exploration_roams_when_there_is_no_frontier(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    explorer = runtime_parts["explorer"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(explorer, ExplorerFake)
+    assert isinstance(input_spy, InputSpy)
+    explorer.target = None
+
+    assert runtime.step() is BotState.EXPLORING
+    assert any(
+        action.kind == "key_hold" and action.key in {"W", "A", "S", "D"}
+        for actions in input_spy.executed
+        for action in actions
+    )
 
 
 def test_recovery_progress_resumes_without_blacklisting(
@@ -1213,6 +1274,38 @@ def test_overlay_draws_on_copy_without_modifying_perception_image() -> None:
 
     assert np.array_equal(source, before)
     assert not np.array_equal(rendered, source)
+
+
+def test_overlay_draws_yolo_boxes_without_using_them_as_combat_markers() -> None:
+    source = np.zeros((40, 60, 3), dtype=np.uint8)
+    observed = observation(
+        enemies=(),
+        loot=(),
+        yolo=(
+            Detection(
+                "vein",
+                Point(0.25, 0.5),
+                0.88,
+                bbox=Rect(5, 10, 20, 12),
+            ),
+        ),
+    )
+    calibration = Calibration(
+        MappingProxyType({"gameplay": Rect(0, 0, 60, 40)}), 1.0, 0.95
+    )
+
+    rendered = DiagnosticsOverlay().render(
+        source,
+        calibration,
+        observed,
+        BotState.EXPLORING,
+        (),
+    )
+
+    assert rendered[10, 5].tolist() != [0, 0, 0]
+    assert "vein" in " ".join(
+        str(item) for item in (observed.yolo[0].kind,)
+    )
 
 
 def exploration_config() -> ExplorationConfig:

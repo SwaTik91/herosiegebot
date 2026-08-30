@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, cast
 
 import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from hero_siege_bot.domain import Detection, Point, normalize_pixel_index
+from hero_siege_bot.domain import Detection, Point, Rect, normalize_pixel_index
 
 HSV = tuple[int, int, int]
 
@@ -232,6 +233,103 @@ class MotionColorDetector:
                 )
             )
         return tuple(detections)
+
+
+@dataclass(frozen=True)
+class YoloBox:
+    kind: str
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    confidence: float
+
+
+class YoloBackend(Protocol):
+    def predict(self, image: NDArray[np.uint8]) -> tuple[YoloBox, ...]: ...
+
+
+class YoloDetector:
+    def __init__(
+        self,
+        backend: YoloBackend,
+        *,
+        confidence_threshold: float,
+    ) -> None:
+        if not 0.0 <= confidence_threshold <= 1.0:
+            raise ValueError("confidence_threshold must be between 0.0 and 1.0")
+        self._backend = backend
+        self._confidence_threshold = confidence_threshold
+
+    def detect(self, image: NDArray[np.uint8]) -> tuple[Detection, ...]:
+        _validate_image(image)
+        height, width = image.shape[:2]
+        detections: list[Detection] = []
+        for box in self._backend.predict(image):
+            if box.confidence < self._confidence_threshold:
+                continue
+            x1 = int(round(min(box.x1, box.x2)))
+            y1 = int(round(min(box.y1, box.y2)))
+            x2 = int(round(max(box.x1, box.x2)))
+            y2 = int(round(max(box.y1, box.y2)))
+            box_width = max(1, x2 - x1)
+            box_height = max(1, y2 - y1)
+            detections.append(
+                Detection(
+                    kind=box.kind,
+                    center=Point(
+                        x=normalize_pixel_index(x1 + (box_width - 1) / 2.0, width),
+                        y=normalize_pixel_index(y1 + (box_height - 1) / 2.0, height),
+                    ),
+                    confidence=float(np.clip(box.confidence, 0.0, 1.0)),
+                    bbox=Rect(x1, y1, box_width, box_height),
+                )
+            )
+        return tuple(detections)
+
+
+class UltralyticsYoloBackend:
+    def __init__(
+        self,
+        weights: Path,
+        *,
+        imgsz: int,
+        device: str,
+    ) -> None:
+        from ultralytics import YOLO
+
+        if imgsz <= 0:
+            raise ValueError("imgsz must be positive")
+        self._model = YOLO(str(weights))
+        self._imgsz = imgsz
+        self._device = None if device == "auto" else device
+
+    def predict(self, image: NDArray[np.uint8]) -> tuple[YoloBox, ...]:
+        results = self._model.predict(
+            source=image,
+            imgsz=self._imgsz,
+            device=self._device,
+            verbose=False,
+        )
+        boxes: list[YoloBox] = []
+        for result in results:
+            names = result.names
+            if result.boxes is None:
+                continue
+            for box in result.boxes:
+                xyxy = box.xyxy[0].tolist()
+                cls = int(box.cls[0])
+                boxes.append(
+                    YoloBox(
+                        kind=str(names[cls]),
+                        x1=float(xyxy[0]),
+                        y1=float(xyxy[1]),
+                        x2=float(xyxy[2]),
+                        y2=float(xyxy[3]),
+                        confidence=float(box.conf[0]),
+                    )
+                )
+        return tuple(boxes)
 
 
 class ScreenStateDetector:
