@@ -232,6 +232,7 @@ class WindowsEmergencyHotkey:
     _HOTKEY_ID = 0x4853
     _WM_HOTKEY = 0x0312
     _WM_QUIT = 0x0012
+    _PM_NOREMOVE = 0x0000
     _MOD_CONTROL = 0x0002
     _MOD_SHIFT = 0x0004
     _MOD_NOREPEAT = 0x4000
@@ -242,6 +243,7 @@ class WindowsEmergencyHotkey:
             raise ValueError("registration_timeout_s must be positive")
         self._registration_timeout_s = registration_timeout_s
         self._ready = threading.Event()
+        self._queue_ready = threading.Event()
         self._shutdown = threading.Event()
         self._registered = False
         self._registration_error_code: int | None = None
@@ -256,6 +258,7 @@ class WindowsEmergencyHotkey:
             if self._thread is not None:
                 raise RuntimeError("Ctrl+Shift+F10 hotkey is already registered")
             self._ready.clear()
+            self._queue_ready.clear()
             self._shutdown.clear()
             self._registered = False
             self._registration_error_code = None
@@ -283,19 +286,20 @@ class WindowsEmergencyHotkey:
     def unregister(self) -> None:
         with self._lock:
             thread = self._thread
-            thread_id = self._thread_id
             if thread is None:
                 return
             self._shutdown.set()
-        if thread_id is not None and sys.platform == "win32":
+        while thread.is_alive() and not self._queue_ready.wait(0.01):
+            pass
+        with self._lock:
+            thread_id = self._thread_id
+        if thread.is_alive() and thread_id is not None and sys.platform == "win32":
             import ctypes
 
             cast(Any, ctypes).windll.user32.PostThreadMessageW(
                 thread_id, self._WM_QUIT, 0, 0
             )
-        thread.join(self._registration_timeout_s)
-        if thread.is_alive():
-            raise RuntimeError("Ctrl+Shift+F10 hotkey thread did not shut down")
+        thread.join()
         with self._lock:
             self._thread = None
             self._thread_id = None
@@ -314,7 +318,15 @@ class WindowsEmergencyHotkey:
 
         user32 = cast(Any, ctypes).windll.user32
         kernel32 = cast(Any, ctypes).windll.kernel32
-        self._thread_id = kernel32.GetCurrentThreadId()
+        message = wintypes.MSG()
+        user32.PeekMessageW(
+            ctypes.byref(message), None, 0, 0, self._PM_NOREMOVE
+        )
+        with self._lock:
+            self._thread_id = kernel32.GetCurrentThreadId()
+            self._queue_ready.set()
+        if self._shutdown.is_set():
+            return
         registered = bool(
             user32.RegisterHotKey(
                 None,
@@ -327,9 +339,15 @@ class WindowsEmergencyHotkey:
         self._report_registration(registered, error_code)
         if not registered:
             return
-        message = wintypes.MSG()
         try:
-            while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+            while not self._shutdown.is_set():
+                result = user32.GetMessageW(
+                    ctypes.byref(message), None, 0, 0
+                )
+                if result <= 0:
+                    break
+                if self._shutdown.is_set():
+                    break
                 if message.message == self._WM_HOTKEY:
                     try:
                         callback()

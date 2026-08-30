@@ -1,6 +1,7 @@
 import importlib
 import sys
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -261,26 +262,6 @@ def test_send_input_uses_latest_client_geometry_for_normalized_mouse_target(
     assert backend._client_coordinates(Point(1.0, 1.0)) == (400, 400)
 
 
-def test_windows_hotkey_waits_for_registration_result_and_unregisters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registered = threading.Event()
-    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.2)
-    monkeypatch.setattr(sys, "platform", "win32")
-
-    def message_loop(callback: object) -> None:
-        del callback
-        hotkey._report_registration(True)
-        registered.set()
-        hotkey._shutdown.wait(0.5)
-
-    monkeypatch.setattr(hotkey, "_message_loop", message_loop)
-
-    hotkey.register(lambda: None)
-    assert registered.is_set()
-    hotkey.unregister()
-
-
 def test_windows_hotkey_registration_failure_is_synchronous(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -304,6 +285,18 @@ def test_windows_hotkey_registers_ctrl_shift_f10_through_win32(
     quit_posted = threading.Event()
 
     class User32:
+        def PeekMessageW(
+            self,
+            message: object,
+            window: object,
+            minimum: int,
+            maximum: int,
+            remove: int,
+        ) -> int:
+            del message
+            calls.append(("peek", window, minimum, maximum, remove))
+            return 0
+
         def RegisterHotKey(
             self, window: object, hotkey_id: int, modifiers: int, virtual_key: int
         ) -> int:
@@ -347,6 +340,7 @@ def test_windows_hotkey_registers_ctrl_shift_f10_through_win32(
     hotkey.unregister()
 
     assert calls == [
+        ("peek", None, 0, 0, 0),
         ("register", None, 0x4853, 0x4006, 0x79),
         ("post", 41, 0x0012, 0, 0),
         ("unregister", None, 0x4853),
@@ -359,6 +353,18 @@ def test_windows_hotkey_reports_immediate_get_last_error(
     calls: list[str] = []
 
     class User32:
+        def PeekMessageW(
+            self,
+            message: object,
+            window: object,
+            minimum: int,
+            maximum: int,
+            remove: int,
+        ) -> int:
+            del message, window, minimum, maximum, remove
+            calls.append("PeekMessageW")
+            return 0
+
         def RegisterHotKey(
             self, window: object, hotkey_id: int, modifiers: int, virtual_key: int
         ) -> int:
@@ -388,23 +394,92 @@ def test_windows_hotkey_reports_immediate_get_last_error(
     with pytest.raises(RuntimeError, match=r"Win32 error 1409"):
         hotkey.register(lambda: None)
 
-    assert calls == ["RegisterHotKey", "GetLastError"]
+    assert calls == ["PeekMessageW", "RegisterHotKey", "GetLastError"]
 
 
-def test_windows_hotkey_registration_wait_is_bounded(
+@pytest.mark.parametrize(
+    ("delayed_phase", "expected_unregister_calls"),
+    [("queue", 0), ("registration", 1)],
+)
+def test_windows_hotkey_timeout_cleans_up_every_startup_phase(
     monkeypatch: pytest.MonkeyPatch,
+    delayed_phase: str,
+    expected_unregister_calls: int,
 ) -> None:
-    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.02)
+    queue_created = threading.Event()
+    quit_posted = threading.Event()
+    registration_active = threading.Event()
+    unregister_calls: list[int] = []
+
+    class User32:
+        def PeekMessageW(
+            self,
+            message: object,
+            window: object,
+            minimum: int,
+            maximum: int,
+            remove: int,
+        ) -> int:
+            del message, window, minimum, maximum, remove
+            if delayed_phase == "queue":
+                time.sleep(0.015)
+            queue_created.set()
+            return 0
+
+        def RegisterHotKey(
+            self, window: object, hotkey_id: int, modifiers: int, virtual_key: int
+        ) -> int:
+            del window, hotkey_id, modifiers, virtual_key
+            if delayed_phase == "registration":
+                time.sleep(0.015)
+            registration_active.set()
+            return 1
+
+        def PostThreadMessageW(
+            self, thread_id: int, message: int, wparam: int, lparam: int
+        ) -> int:
+            del thread_id, message, wparam, lparam
+            if queue_created.is_set():
+                quit_posted.set()
+                return 1
+            return 0
+
+        def GetMessageW(
+            self, message: object, window: object, minimum: int, maximum: int
+        ) -> int:
+            del message, window, minimum, maximum
+            quit_posted.wait(0.1)
+            return 0
+
+        def UnregisterHotKey(self, window: object, hotkey_id: int) -> int:
+            del window
+            registration_active.clear()
+            unregister_calls.append(hotkey_id)
+            return 1
+
+    class Kernel32:
+        def GetCurrentThreadId(self) -> int:
+            if delayed_phase == "queue" and not queue_created.is_set():
+                time.sleep(0.015)
+            return 43
+
+    import ctypes
+
     monkeypatch.setattr(sys, "platform", "win32")
-
-    def stalled_message_loop(callback: object) -> None:
-        del callback
-        hotkey._shutdown.wait(0.2)
-
-    monkeypatch.setattr(hotkey, "_message_loop", stalled_message_loop)
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        SimpleNamespace(user32=User32(), kernel32=Kernel32()),
+        raising=False,
+    )
+    hotkey = WindowsEmergencyHotkey(registration_timeout_s=0.01)
 
     with pytest.raises(TimeoutError, match=r"Ctrl\+Shift\+F10 RegisterHotKey"):
         hotkey.register(lambda: None)
+
+    assert hotkey._thread is None
+    assert not registration_active.is_set()
+    assert len(unregister_calls) == expected_unregister_calls
 
 
 def test_input_module_is_import_safe_without_windows_modules(
