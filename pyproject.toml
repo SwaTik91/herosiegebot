@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 hero-siege-bot = "hero_siege_bot.cli:main"
+hero-siege-label = "hero_siege_bot.labeler_app:main"
 
 [project.optional-dependencies]
 dev = [

@@ -196,3 +196,18 @@ EXPLORING
 
 При ошибке приложите `events.jsonl`, проблемные PNG, разрешение окна, масштаб
 Windows, масштаб UI и версию Hero Siege.
+
+## Разметка скриншотов на Mac
+
+Локальная страница правит YOLO-рамки в `datasets/user-screenshots/`.
+
+```bash
+.venv/bin/python -m hero_siege_bot.labeler_app
+```
+
+Откроется http://127.0.0.1:8765/ — старые рамки уже на кадре.
+
+- `1`–`8` — класс (player, companion, enemy, loot, vein, chest, stash, waypoint)
+- мышь — новая рамка или перетащить существующую
+- `Delete` — удалить выбранную
+- `←` `→` или `A` `D` — кадр, автосохранение в `labels/*.txt`
