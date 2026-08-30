@@ -1,0 +1,6 @@
+include README.md
+include config/*.yaml
+include docs/*.md
+include scripts/*.py
+include scripts/*.ps1
+recursive-include src/hero_siege_bot/assets *.png
