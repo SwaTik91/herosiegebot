@@ -1,8 +1,11 @@
+import math
+
 from hero_siege_bot.config import CombatConfig, SurvivalConfig
 from hero_siege_bot.domain import Action, Detection, Observation
 
 _KEY_TAP_DURATION_S = 0.05
 _COMBAT_SKILL_KEYS = ("Q", "E")
+COMBAT_TARGET_MATCH_RADIUS_NORMALIZED = 0.08
 
 
 def _best_detection(
@@ -24,12 +27,16 @@ class CombatController:
         self._config = config
         self._last_skill_use: dict[str, float] = {}
         self._started_at: float | None = None
+        self._active_target: Detection | None = None
         self.abandoned = False
+        self.abandoned_target: Detection | None = None
 
     def reset_abandonment(self) -> None:
         """Start a fresh encounter after runtime observes an enemy-free frame."""
         self._started_at = None
+        self._active_target = None
         self.abandoned = False
+        self.abandoned_target = None
 
     def actions(self, observation: Observation, now: float) -> tuple[Action, ...]:
         target = _best_detection(
@@ -37,15 +44,24 @@ class CombatController:
             self._config.detection_confidence,
         )
         if target is None:
-            self._started_at = None
-            self.abandoned = False
+            self.reset_abandonment()
             return ()
-        if self._started_at is None:
+        if (
+            self._started_at is None
+            or self._active_target is None
+            or self._target_distance(target, self._active_target)
+            > COMBAT_TARGET_MATCH_RADIUS_NORMALIZED
+        ):
             self._started_at = now
+            self.abandoned = False
+            self.abandoned_target = None
+        self._active_target = target
         if now - self._started_at >= self._config.combat_timeout_s:
             self.abandoned = True
+            self.abandoned_target = target
             return ()
         self.abandoned = False
+        self.abandoned_target = None
 
         actions = [
             Action(kind="mouse_move", target=target.center),
@@ -68,6 +84,13 @@ class CombatController:
                 )
                 self._last_skill_use[key] = now
         return tuple(actions)
+
+    @staticmethod
+    def _target_distance(first: Detection, second: Detection) -> float:
+        return math.hypot(
+            first.center.x - second.center.x,
+            first.center.y - second.center.y,
+        )
 
 
 class SurvivalController:

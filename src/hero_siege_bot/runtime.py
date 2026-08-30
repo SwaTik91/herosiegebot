@@ -1,15 +1,33 @@
 from __future__ import annotations
 
+import math
 import threading
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
-from hero_siege_bot.domain import Action, BotState, MapMasks, Observation, Point, Rect
+from hero_siege_bot.controllers import COMBAT_TARGET_MATCH_RADIUS_NORMALIZED
+from hero_siege_bot.domain import (
+    Action,
+    BotState,
+    Detection,
+    MapMasks,
+    Observation,
+    Point,
+    Rect,
+)
 from hero_siege_bot.state_machine import BotStateMachine
+
+ABANDONED_TARGET_SUPPRESSION_MAX_STEPS = 8
+
+
+@dataclass(frozen=True)
+class _CombatSuppression:
+    target: Detection
+    expires_after_step: int
 
 
 class Capture(Protocol):
@@ -104,6 +122,7 @@ class BotRuntime:
             detection_confidence=detection_confidence,
         )
         self._calibration_confidence = calibration_confidence
+        self._detection_confidence = detection_confidence
         self._no_progress_sample_limit = no_progress_sample_limit
         self._movement_pulse_s = movement_pulse_s
         self._calibration: Calibration | None = None
@@ -114,7 +133,8 @@ class BotRuntime:
         self._last_movement_key: str | None = None
         self._no_progress_samples = 0
         self._recovery_phase = 0
-        self._combat_suppressed = False
+        self._decision_step = 0
+        self._combat_suppression: _CombatSuppression | None = None
 
     def step(self) -> BotState:
         try:
@@ -229,6 +249,7 @@ class BotRuntime:
     def _decide(
         self, observation: Observation
     ) -> tuple[BotState, tuple[Action, ...], bool]:
+        self._decision_step += 1
         state_before = self._machine.state
         state_observation = observation
         if (
@@ -236,16 +257,7 @@ class BotRuntime:
             and self._calibration is not None
         ):
             self._machine.state = BotState.CALIBRATING
-        if self._combat_suppressed:
-            if observation.enemies:
-                state_observation = replace(state_observation, enemies=())
-            else:
-                self._combat_suppressed = False
-                reset_abandonment = getattr(
-                    self.combat, "reset_abandonment", None
-                )
-                if callable(reset_abandonment):
-                    reset_abandonment()
+        state_observation = self._apply_combat_suppression(state_observation)
         if self._machine.state in (BotState.EXPLORING, BotState.RECOVERING):
             player = observation.player_map_position
             masks = observation.map_masks
@@ -279,9 +291,25 @@ class BotRuntime:
         if state is BotState.EXPLORING:
             actions.extend(self._exploration_actions(observation))
         elif state is BotState.COMBAT:
-            actions.extend(self.combat.actions(observation, observation.timestamp))
+            actions.extend(
+                self.combat.actions(state_observation, observation.timestamp)
+            )
             if bool(getattr(self.combat, "abandoned", False)):
-                self._combat_suppressed = True
+                abandoned_target = getattr(
+                    self.combat, "abandoned_target", None
+                )
+                if not isinstance(abandoned_target, Detection):
+                    abandoned_target = self._best_confident_enemy(
+                        state_observation.enemies
+                    )
+                if abandoned_target is not None:
+                    self._combat_suppression = _CombatSuppression(
+                        target=abandoned_target,
+                        expires_after_step=(
+                            self._decision_step
+                            + ABANDONED_TARGET_SUPPRESSION_MAX_STEPS
+                        ),
+                    )
                 self._machine.state = BotState.RECOVERING
                 recovered_state, recovered_actions, _ = self._recover(
                     state_observation
@@ -306,6 +334,61 @@ class BotRuntime:
                 )
             )
         return state, tuple(actions), release
+
+    def _apply_combat_suppression(
+        self, observation: Observation
+    ) -> Observation:
+        suppression = self._combat_suppression
+        if suppression is None:
+            return observation
+        if self._decision_step > suppression.expires_after_step:
+            self._clear_combat_suppression()
+            return observation
+
+        confident_matches = tuple(
+            detection
+            for detection in observation.enemies
+            if detection.confidence >= self._detection_confidence
+            and self._detection_distance(detection, suppression.target)
+            <= COMBAT_TARGET_MATCH_RADIUS_NORMALIZED
+        )
+        if not confident_matches:
+            self._clear_combat_suppression()
+            return observation
+        return replace(
+            observation,
+            enemies=tuple(
+                detection
+                for detection in observation.enemies
+                if detection not in confident_matches
+            ),
+        )
+
+    def _clear_combat_suppression(self) -> None:
+        self._combat_suppression = None
+        reset_abandonment = getattr(self.combat, "reset_abandonment", None)
+        if callable(reset_abandonment):
+            reset_abandonment()
+
+    def _best_confident_enemy(
+        self, detections: tuple[Detection, ...]
+    ) -> Detection | None:
+        return max(
+            (
+                detection
+                for detection in detections
+                if detection.confidence >= self._detection_confidence
+            ),
+            key=lambda detection: detection.confidence,
+            default=None,
+        )
+
+    @staticmethod
+    def _detection_distance(first: Detection, second: Detection) -> float:
+        return math.hypot(
+            first.center.x - second.center.x,
+            first.center.y - second.center.y,
+        )
 
     def _exploration_actions(self, observation: Observation) -> tuple[Action, ...]:
         player = observation.player_map_position
@@ -401,7 +484,7 @@ class BotRuntime:
         self._calibration_source = None
         self._calibration_frames.clear()
         self._target = None
-        self._combat_suppressed = False
+        self._clear_combat_suppression()
 
     @staticmethod
     def _frame_geometry(captured: CapturedFrame) -> tuple[Rect, int, int]:

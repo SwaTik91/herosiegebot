@@ -621,6 +621,113 @@ def test_combat_can_trigger_again_after_enemy_clear_resets_abandonment(
     ]
 
 
+def test_different_confident_enemy_preempts_while_old_target_is_suppressed(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(input_spy, InputSpy)
+    old_enemy = Detection("enemy", Point(0.25, 0.5), 0.95)
+    new_enemy = Detection("enemy", Point(0.8, 0.5), 0.9)
+    perception.observations = [
+        observation(timestamp=0.0),
+        observation(enemies=(old_enemy,), timestamp=1.0),
+        observation(enemies=(old_enemy,), timestamp=2.0, movement_progress=0.0),
+        observation(enemies=(old_enemy, new_enemy), timestamp=3.0),
+    ]
+
+    states = [runtime.step() for _ in range(4)]
+
+    assert states[-1] is BotState.COMBAT
+    assert Action("mouse_move", target=new_enemy.center) in input_spy.executed[-1]
+
+
+def test_low_confidence_noise_does_not_keep_old_target_suppressed(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    assert isinstance(perception, PerceptionFake)
+    old_enemy = Detection("enemy", Point(0.25, 0.5), 0.95)
+    noise = Detection("enemy", Point(0.25, 0.5), 0.2)
+    new_enemy = Detection("enemy", Point(0.8, 0.5), 0.9)
+    perception.observations = [
+        observation(timestamp=0.0),
+        observation(enemies=(old_enemy,), timestamp=1.0),
+        observation(enemies=(old_enemy,), timestamp=2.0, movement_progress=0.0),
+        observation(enemies=(noise,), timestamp=3.0),
+        observation(enemies=(new_enemy,), timestamp=4.0),
+    ]
+
+    states = [runtime.step() for _ in range(5)]
+
+    assert states[-2:] == [BotState.EXPLORING, BotState.COMBAT]
+
+
+def test_abandoned_target_suppression_expires_while_detection_persists(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+    from hero_siege_bot.runtime import ABANDONED_TARGET_SUPPRESSION_MAX_STEPS
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    explorer.progressed = False
+    enemy = Detection("enemy", Point(0.25, 0.5), 0.95)
+    persistent_steps = ABANDONED_TARGET_SUPPRESSION_MAX_STEPS + 1
+    perception.observations = [
+        observation(timestamp=0.0),
+        observation(enemies=(enemy,), timestamp=1.0),
+        observation(enemies=(enemy,), timestamp=2.0, movement_progress=0.0),
+        *[
+            observation(
+                enemies=(enemy,),
+                timestamp=float(3 + offset),
+                movement_progress=0.0,
+            )
+            for offset in range(persistent_steps)
+        ],
+    ]
+
+    states = [runtime.step() for _ in perception.observations.copy()]
+
+    assert BotState.RECOVERING in states
+    assert states[-1] is BotState.COMBAT
+
+
 def test_death_restart_click_invalidates_calibration(
     runtime: BotRuntime, runtime_parts: dict[str, object]
 ) -> None:
