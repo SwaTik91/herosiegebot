@@ -33,7 +33,9 @@ HUD_ANCHOR = _anchor(60, 30, 10)
 MINIMAP_ANCHOR = _anchor(60, 60, 20)
 
 
-def _windows_1600x1024_frame() -> NDArray[np.uint8]:
+def _windows_1600x1024_frame(
+    *, minimap_x: int = 1403
+) -> NDArray[np.uint8]:
     image = np.zeros((1024, 1600, 3), dtype=np.uint8)
     anchor_dir = Path("src/hero_siege_bot/assets/anchors")
     hud = cv2.imread(
@@ -51,7 +53,7 @@ def _windows_1600x1024_frame() -> NDArray[np.uint8]:
         (40, 67),
         interpolation=cv2.INTER_AREA,
     )
-    image[0:38, 1403:1441] = cv2.resize(
+    image[0:38, minimap_x : minimap_x + 38] = cv2.resize(
         minimap,
         (38, 38),
         interpolation=cv2.INTER_AREA,
@@ -194,7 +196,7 @@ def test_current_hud_profile_calibrates_verified_fixture_regions() -> None:
     assert result.regions["screen_state"] == Rect(0, 0, 1024, 655)
 
 
-def test_scaled_profile_clips_only_full_frame_regions_on_1600x1024() -> None:
+def test_scaled_profile_clips_tolerated_edge_overscan_on_1600x1024() -> None:
     image = _windows_1600x1024_frame()
     frames = [
         CapturedFrame(
@@ -217,9 +219,33 @@ def test_scaled_profile_clips_only_full_frame_regions_on_1600x1024() -> None:
     assert result.confidence >= 0.999
     assert result.regions["health"] == Rect(87, 26, 163, 19)
     assert result.regions["resource"] == Rect(87, 53, 163, 16)
-    assert result.regions["minimap"] == Rect(1403, 0, 200, 226)
+    assert result.regions["minimap"] == Rect(1403, 0, 197, 226)
     assert result.regions["gameplay"] == Rect(0, 0, 1600, 1024)
     assert result.regions["screen_state"] == Rect(0, 0, 1600, 1024)
+
+
+def test_scaled_profile_preserves_minimap_overscan_beyond_tolerance() -> None:
+    image = _windows_1600x1024_frame(minimap_x=1415)
+    frames = [
+        CapturedFrame(
+            image=image.copy(),
+            client_rect=Rect(0, 0, 1600, 1024),
+            focused=True,
+            timestamp=float(index),
+        )
+        for index in range(5)
+    ]
+    config = load_config(Path("config/default.yaml"))
+    config = replace(
+        config,
+        calibration=replace(config.calibration, max_scale=1.6),
+    )
+
+    result = _load_calibrator(config).calibrate(frames)
+
+    assert result is not None
+    assert result.regions["minimap"] == Rect(1415, 0, 200, 226)
+    assert result.regions["minimap"].x + result.regions["minimap"].width > 1600
 
 
 def test_non_clippable_anchor_region_preserves_invalid_overscan() -> None:

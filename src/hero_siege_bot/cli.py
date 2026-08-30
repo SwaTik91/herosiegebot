@@ -81,7 +81,12 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "hud_status_right_cap", -5.1, 0.6875, 5.1, 0.3125
         ),
         "minimap": AnchorRegion(
-            "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
+            "minimap_top_left_corner",
+            0.0,
+            0.0,
+            5.25,
+            143 / 24,
+            edge_clip_tolerance=0.05,
         ),
         "gameplay": AnchorRegion(
             "hud_status_right_cap",
@@ -108,7 +113,12 @@ def _load_calibrator(config: BotConfig) -> AutoCalibrator:
             "hud_status_right_cap_v2", -3.48, 26 / 42, 4.08, 10 / 42
         ),
         "minimap": AnchorRegion(
-            "minimap_top_left_corner", 0.0, 0.0, 5.25, 143 / 24
+            "minimap_top_left_corner",
+            0.0,
+            0.0,
+            5.25,
+            143 / 24,
+            edge_clip_tolerance=0.05,
         ),
         "gameplay": AnchorRegion(
             "hud_status_right_cap_v2",

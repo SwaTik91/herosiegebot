@@ -22,6 +22,7 @@ class AnchorRegion:
     width: float
     height: float
     clip_to_frame: bool = False
+    edge_clip_tolerance: float | None = None
 
 
 @dataclass(frozen=True)
@@ -252,15 +253,13 @@ class AutoCalibrator:
                 height=round(definition.height * anchor.height),
             )
             if definition.clip_to_frame:
-                left = max(0, region.x)
-                top = max(0, region.y)
-                right = min(frame_width, region.x + region.width)
-                bottom = min(frame_height, region.y + region.height)
-                region = Rect(
-                    x=left,
-                    y=top,
-                    width=max(0, right - left),
-                    height=max(0, bottom - top),
+                region = self._clip_to_frame(region, frame_width, frame_height)
+            elif definition.edge_clip_tolerance is not None:
+                region = self._clip_tolerated_edges(
+                    region,
+                    frame_width,
+                    frame_height,
+                    definition.edge_clip_tolerance,
                 )
             regions[name] = region
 
@@ -269,3 +268,34 @@ class AutoCalibrator:
             scale=sum(match.scale for match in all_matches) / len(all_matches),
             confidence=min(match.confidence for match in all_matches),
         )
+
+    @staticmethod
+    def _clip_to_frame(region: Rect, frame_width: int, frame_height: int) -> Rect:
+        left = max(0, region.x)
+        top = max(0, region.y)
+        right = min(frame_width, region.x + region.width)
+        bottom = min(frame_height, region.y + region.height)
+        return Rect(
+            x=left,
+            y=top,
+            width=max(0, right - left),
+            height=max(0, bottom - top),
+        )
+
+    @classmethod
+    def _clip_tolerated_edges(
+        cls,
+        region: Rect,
+        frame_width: int,
+        frame_height: int,
+        tolerance: float,
+    ) -> Rect:
+        overscan = (
+            (max(0, -region.x), region.width),
+            (max(0, region.x + region.width - frame_width), region.width),
+            (max(0, -region.y), region.height),
+            (max(0, region.y + region.height - frame_height), region.height),
+        )
+        if any(pixels > dimension * tolerance for pixels, dimension in overscan):
+            return region
+        return cls._clip_to_frame(region, frame_width, frame_height)

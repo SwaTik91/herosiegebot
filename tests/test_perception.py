@@ -214,7 +214,7 @@ def test_scaled_calibration_feeds_perception_without_invalid_crop_pause() -> Non
         (40, 67),
         interpolation=cv2.INTER_AREA,
     )
-    image[0:38, 1400:1438] = cv2.resize(
+    image[0:38, 1403:1441] = cv2.resize(
         minimap,
         (38, 38),
         interpolation=cv2.INTER_AREA,
@@ -233,6 +233,7 @@ def test_scaled_calibration_feeds_perception_without_invalid_crop_pause() -> Non
     )
     calibration = _load_calibrator(config).calibrate([captured] * 5)
     assert calibration is not None
+    assert calibration.regions["minimap"] == Rect(1403, 0, 197, 226)
 
     class NoDetections:
         def detect(self, crop: NDArray[np.uint8]) -> tuple[Detection, ...]:
