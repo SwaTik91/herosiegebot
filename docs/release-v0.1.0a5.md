@@ -7,8 +7,15 @@
 - Adds a proportional geometry fallback only after template profiles are
   rejected. The fallback requires three consecutive focused frames with
   identical image dimensions and client rectangles.
+- Requires independent health/resource-bar and minimap visual evidence before
+  proportional geometry is eligible. Stable dimensions alone never identify
+  the supported HUD; contentless and unsupported captures are rejected.
+- Enforces the strict calibration confidence range from `0.9` through `1.0`;
+  lower and non-finite configuration values are invalid.
 - Keeps calibration pending when focus or capture geometry is unstable, so an
   unsafe fallback cannot enable input.
+- Invalidates cached calibration and partial frame history whenever capture is
+  unavailable.
 - Prints changed calibration diagnostics for frame progress, unstable focus or
   geometry, capture/focus/geometry invalidation, and the selected calibration
   method. Repeated identical messages are suppressed.
@@ -45,9 +52,11 @@ could make template-first calibration select incorrect geometry.
 ## Validation scope
 
 Offline tests cover strict-template precedence, the three-frame fallback gate,
-focus and geometry instability, normalized crop validity at both fixture
-sizes, and changed-only diagnostic output. Live Windows capture, input smoke
-tests, and the 30-minute acceptance run remain required before broader use.
+real-fixture HUD eligibility, contentless/unsupported rejection, focus,
+geometry and outage invalidation, independently annotated crop validity at
+both fixture sizes, and changed-only diagnostic output. Live Windows capture,
+input smoke tests, and the 30-minute acceptance run remain required before
+broader use.
 
 No tag, GitHub release, push, merge, or publication is performed by this
 release-preparation change.

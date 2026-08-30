@@ -49,6 +49,19 @@ consecutive frames, and all three must be focused with identical image
 dimensions and identical client rectangles. A focus loss or geometry change
 keeps calibration pending instead of accepting an unstable fallback.
 
+Stable geometry is not treated as proof that Hero Siege is visible. Before
+accepting proportional geometry, every frame must also contain independent,
+relaxed visual evidence of the supported HUD: horizontal health/resource color
+structure in the upper-left HUD area and structured minimap content in the
+upper-right area. Contentless captures and unsupported images remain
+uncalibrated with `proportional calibration rejected: unsupported HUD`. These
+eligibility cues are broader than, and independent from, the normalized output
+rectangles.
+
+Strict template matching retains a mandatory confidence floor of `0.9`.
+Configuration values below `0.9`, non-finite values, and values above `1.0`
+are rejected rather than weakening strict calibration.
+
 The CLI prints changed calibration diagnostics with a `calibration:` prefix.
 Reachable output reports stable-frame progress, focus or geometry instability,
 capture/focus/geometry invalidation, and whether calibration completed with

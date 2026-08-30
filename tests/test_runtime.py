@@ -97,6 +97,19 @@ class DiagnosticCalibratorFake(CalibratorFake):
         self.last_diagnostic: str | None = None
 
 
+class ThreeFrameCalibratorFake(CalibratorFake):
+    def __init__(self) -> None:
+        super().__init__()
+        self.frame_counts: list[int] = []
+
+    def calibrate(self, frames: Sequence[CapturedFrame]) -> Calibration | None:
+        self.calls += 1
+        self.frame_counts.append(len(frames))
+        if len(frames) < 3:
+            return None
+        return self.result
+
+
 class PerceptionFake:
     def __init__(self) -> None:
         self.observations: list[Observation] = [observation()]
@@ -238,6 +251,46 @@ def test_returning_focus_requires_fresh_calibration(
     capture.next_frame = frame(focused=True)
     assert runtime.step() is BotState.EXPLORING
     assert calibrator.calls == 2
+
+
+def test_capture_outage_invalidates_cached_calibration(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    capture = runtime_parts["capture"]
+    calibrator = runtime_parts["calibrator"]
+    assert isinstance(capture, CaptureFake)
+    assert isinstance(calibrator, CalibratorFake)
+    assert runtime.step() is BotState.EXPLORING
+    assert calibrator.calls == 1
+
+    capture.next_frame = None
+    assert runtime.step() is BotState.PAUSED
+
+    capture.next_frame = frame()
+    assert runtime.step() is BotState.EXPLORING
+    assert calibrator.calls == 2
+
+
+def test_capture_outage_discards_partial_calibration_frames(
+    runtime_parts: dict[str, object],
+) -> None:
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    calibrator = ThreeFrameCalibratorFake()
+    runtime_parts["calibrator"] = calibrator
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+
+    assert runtime.step() is BotState.CALIBRATING
+    capture.next_frame = None
+    assert runtime.step() is BotState.PAUSED
+    capture.next_frame = frame(timestamp=2.0)
+    assert runtime.step() is BotState.CALIBRATING
+    capture.next_frame = frame(timestamp=3.0)
+    assert runtime.step() is BotState.CALIBRATING
+    capture.next_frame = frame(timestamp=4.0)
+    assert runtime.step() is BotState.EXPLORING
+
+    assert calibrator.frame_counts == [1, 1, 2, 3]
 
 
 def test_runtime_reports_initial_state_and_changes_without_repeating(

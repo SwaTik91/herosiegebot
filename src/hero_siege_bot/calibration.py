@@ -304,6 +304,11 @@ class AutoCalibrator:
         if any(frame.client_rect != first_client_rect for frame in frames[1:]):
             self._last_diagnostic = "waiting for stable capture geometry"
             return None
+        if any(not self._has_supported_hud(frame.image) for frame in frames):
+            self._last_diagnostic = (
+                "proportional calibration rejected: unsupported HUD"
+            )
+            return None
 
         frame_height, frame_width = first_shape
         regions = {
@@ -327,6 +332,65 @@ class AutoCalibrator:
         )
         self._last_diagnostic = "calibrated with proportional geometry"
         return calibration
+
+    @staticmethod
+    def _has_supported_hud(image: NDArray[np.uint8]) -> bool:
+        if image.ndim != 3 or image.shape[2] != 3:
+            return False
+        frame_height, frame_width = image.shape[:2]
+        if frame_height < 1 or frame_width < 1:
+            return False
+
+        hud = image[: max(1, round(frame_height * 0.12)), : max(1, round(frame_width * 0.25))]
+        hud_hsv = cv2.cvtColor(hud, cv2.COLOR_BGR2HSV)
+        hue = hud_hsv[:, :, 0]
+        saturation = hud_hsv[:, :, 1]
+        value = hud_hsv[:, :, 2]
+        red = (
+            ((hue <= 10) | (hue >= 170))
+            & (saturation >= 100)
+            & (value >= 70)
+        )
+        resource = (
+            (hue >= 90)
+            & (hue <= 140)
+            & (saturation >= 80)
+            & (value >= 60)
+        )
+        minimum_bar_width = max(4, round(frame_width * 0.025))
+        if not AutoCalibrator._has_horizontal_color_bar(red, minimum_bar_width):
+            return False
+        if not AutoCalibrator._has_horizontal_color_bar(resource, minimum_bar_width):
+            return False
+
+        minimap = image[
+            : max(1, round(frame_height * 0.28)),
+            min(frame_width - 1, round(frame_width * 0.84)) :,
+        ]
+        minimap_gray = cv2.cvtColor(minimap, cv2.COLOR_BGR2GRAY)
+        edge_ratio = float(
+            np.count_nonzero(cv2.Canny(minimap_gray, 60, 150))
+        ) / minimap_gray.size
+        return float(np.std(minimap_gray)) >= 15.0 and 0.02 <= edge_ratio <= 0.3
+
+    @staticmethod
+    def _has_horizontal_color_bar(
+        mask: NDArray[np.bool_], minimum_width: int
+    ) -> bool:
+        count, _, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8),
+            connectivity=8,
+        )
+        for x, y, width, height, area in stats[1:count]:
+            del x, y
+            if (
+                width >= minimum_width
+                and height >= 2
+                and width >= height * 4
+                and area >= width * 2
+            ):
+                return True
+        return False
 
     def _build(
         self,

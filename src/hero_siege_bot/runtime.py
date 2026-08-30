@@ -189,6 +189,7 @@ class BotRuntime:
             captured = self.capture.grab()
             if captured is None:
                 self.input.release_all()
+                self._invalidate_calibration()
                 self._calibration_diagnostic = "capture unavailable"
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED

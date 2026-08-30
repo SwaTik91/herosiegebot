@@ -50,7 +50,10 @@ class CalibrationConfig:
     scale_step: float
 
     def __post_init__(self) -> None:
-        _ratio("confidence_threshold", self.confidence_threshold)
+        if not 0.9 <= self.confidence_threshold <= 1.0:
+            raise ValueError(
+                "confidence_threshold must be between 0.9 and 1.0"
+            )
         if self.min_stable_frames <= 0:
             raise ValueError("min_stable_frames must be positive")
         _positive("min_scale", self.min_scale)

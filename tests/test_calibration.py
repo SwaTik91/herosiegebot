@@ -38,6 +38,12 @@ BOREAL_REGIONS = {
     name: Rect(**rectangle)
     for name, rectangle in BOREAL_METADATA["hud_rectangles"].items()
 }
+HIGHLAND_IMAGE = Path("tests/fixtures/frames/highland_graveyard_1024x655.png")
+HIGHLAND_METADATA = yaml.safe_load(HIGHLAND_IMAGE.with_suffix(".yaml").read_text())
+HIGHLAND_REGIONS = {
+    name: Rect(**rectangle)
+    for name, rectangle in HIGHLAND_METADATA["hud_rectangles"].items()
+}
 
 
 def _windows_1600x1024_frame(
@@ -250,18 +256,50 @@ def test_proportional_fallback_calibrates_real_1600x1024_frame() -> None:
     assert result.confidence >= 0.9
 
 
-def test_proportional_fallback_scales_real_frame_to_1024x655() -> None:
-    frames = _captured_frames(BOREAL_IMAGE, count=3, size=(1024, 655))
+def test_proportional_fallback_matches_annotated_real_1024x655_fixture() -> None:
+    frames = _captured_frames(HIGHLAND_IMAGE, count=3)
     calibrator = _calibrator_with_proportional_fallback()
 
     result = calibrator.calibrate(frames)
 
     assert result is not None
     assert result.method == "proportional"
-    assert result.regions["health"] == Rect(56, 17, 104, 12)
-    assert result.regions["resource"] == Rect(56, 34, 104, 10)
-    assert result.regions["minimap"] == Rect(898, 0, 126, 145)
-    assert result.regions["minimap"].x + result.regions["minimap"].width == 1024
+    for name, expected in HIGHLAND_REGIONS.items():
+        actual = result.regions[name]
+        assert abs(actual.x - expected.x) <= 2
+        assert abs(actual.y - expected.y) <= 2
+        assert abs(actual.width - expected.width) <= 2
+        assert abs(actual.height - expected.height) <= 2
+
+
+def test_proportional_fallback_rejects_three_black_1600x1024_frames() -> None:
+    image = np.zeros((1024, 1600, 3), dtype=np.uint8)
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(_frames([image, image.copy(), image.copy()]))
+
+    assert result is None
+    assert calibrator.last_diagnostic == "proportional calibration rejected: unsupported HUD"
+
+
+def test_proportional_fallback_rejects_contentful_image_without_supported_hud() -> None:
+    image = np.full((1024, 1600, 3), (40, 150, 40), dtype=np.uint8)
+    cv2.circle(image, (800, 512), 240, (230, 230, 230), 12)
+    cv2.putText(
+        image,
+        "UNSUPPORTED UI",
+        (550, 530),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        2.0,
+        (20, 20, 20),
+        4,
+    )
+    calibrator = _calibrator_with_proportional_fallback()
+
+    result = calibrator.calibrate(_frames([image, image.copy(), image.copy()]))
+
+    assert result is None
+    assert calibrator.last_diagnostic == "proportional calibration rejected: unsupported HUD"
 
 
 @pytest.mark.parametrize(
