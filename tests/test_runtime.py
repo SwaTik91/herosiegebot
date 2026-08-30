@@ -531,6 +531,96 @@ def test_combat_timeout_abandons_persistent_detection(
     assert runtime.step() is not BotState.COMBAT
 
 
+def test_persistent_abandoned_enemy_does_not_reset_recovery_sequence(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    assert isinstance(input_spy, InputSpy)
+    explorer.progressed = False
+    enemy = Detection("enemy", Point(0.5, 0.5), 0.9)
+    perception.observations = [
+        observation(timestamp=0.0),
+        *[
+            observation(
+                enemies=(enemy,),
+                timestamp=float(timestamp),
+                movement_progress=0.0,
+            )
+            for timestamp in range(1, 7)
+        ],
+    ]
+
+    states = [runtime.step() for _ in range(7)]
+
+    assert states == [
+        BotState.EXPLORING,
+        BotState.COMBAT,
+        BotState.RECOVERING,
+        BotState.RECOVERING,
+        BotState.RECOVERING,
+        BotState.EXPLORING,
+        BotState.EXPLORING,
+    ]
+    post_timeout_actions = input_spy.executed[2:]
+    assert post_timeout_actions.count((Action("release_all"),)) == 1
+    assert (Action("key_hold", key="S", duration_s=0.1),) in post_timeout_actions
+    assert (Action("key_hold", key="A", duration_s=0.1),) in post_timeout_actions
+
+
+def test_combat_can_trigger_again_after_enemy_clear_resets_abandonment(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    enemy = Detection("enemy", Point(0.5, 0.5), 0.9)
+    explorer.progress_results = [True, False, True]
+    perception.observations = [
+        observation(timestamp=0.0),
+        observation(enemies=(enemy,), timestamp=1.0),
+        observation(enemies=(enemy,), timestamp=2.0, movement_progress=0.0),
+        observation(enemies=(), timestamp=3.0),
+        observation(enemies=(enemy,), timestamp=4.0),
+    ]
+
+    states = [runtime.step() for _ in range(5)]
+
+    assert states == [
+        BotState.EXPLORING,
+        BotState.COMBAT,
+        BotState.RECOVERING,
+        BotState.EXPLORING,
+        BotState.COMBAT,
+    ]
+
+
 def test_death_restart_click_invalidates_calibration(
     runtime: BotRuntime, runtime_parts: dict[str, object]
 ) -> None:

@@ -26,6 +26,11 @@ class CombatController:
         self._started_at: float | None = None
         self.abandoned = False
 
+    def reset_abandonment(self) -> None:
+        """Start a fresh encounter after runtime observes an enemy-free frame."""
+        self._started_at = None
+        self.abandoned = False
+
     def actions(self, observation: Observation, now: float) -> tuple[Action, ...]:
         target = _best_detection(
             observation.enemies,

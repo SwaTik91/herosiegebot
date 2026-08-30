@@ -114,6 +114,7 @@ class BotRuntime:
         self._last_movement_key: str | None = None
         self._no_progress_samples = 0
         self._recovery_phase = 0
+        self._combat_suppressed = False
 
     def step(self) -> BotState:
         try:
@@ -235,6 +236,16 @@ class BotRuntime:
             and self._calibration is not None
         ):
             self._machine.state = BotState.CALIBRATING
+        if self._combat_suppressed:
+            if observation.enemies:
+                state_observation = replace(state_observation, enemies=())
+            else:
+                self._combat_suppressed = False
+                reset_abandonment = getattr(
+                    self.combat, "reset_abandonment", None
+                )
+                if callable(reset_abandonment):
+                    reset_abandonment()
         if self._machine.state in (BotState.EXPLORING, BotState.RECOVERING):
             player = observation.player_map_position
             masks = observation.map_masks
@@ -244,7 +255,7 @@ class BotRuntime:
                 and self.explorer.record_progress(player, masks)
             )
             state_observation = replace(
-                observation, movement_progress=1.0 if progressed else 0.0
+                state_observation, movement_progress=1.0 if progressed else 0.0
             )
             if self._machine.state is BotState.EXPLORING:
                 if progressed:
@@ -270,6 +281,7 @@ class BotRuntime:
         elif state is BotState.COMBAT:
             actions.extend(self.combat.actions(observation, observation.timestamp))
             if bool(getattr(self.combat, "abandoned", False)):
+                self._combat_suppressed = True
                 self._machine.state = BotState.RECOVERING
                 recovered_state, recovered_actions, _ = self._recover(
                     state_observation
@@ -389,6 +401,7 @@ class BotRuntime:
         self._calibration_source = None
         self._calibration_frames.clear()
         self._target = None
+        self._combat_suppressed = False
 
     @staticmethod
     def _frame_geometry(captured: CapturedFrame) -> tuple[Rect, int, int]:
