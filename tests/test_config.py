@@ -1,3 +1,4 @@
+import tomllib
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -5,6 +6,15 @@ import pytest
 
 from hero_siege_bot.config import load_config
 from hero_siege_bot.domain import BotState, Detection, Point
+
+
+def _project_version(path: Path) -> str:
+    with path.open("rb") as project_file:
+        return tomllib.load(project_file)["project"]["version"]
+
+
+def test_package_version_is_a5() -> None:
+    assert _project_version(Path("pyproject.toml")) == "0.1.0a5"
 
 
 def write_config(tmp_path: Path, contents: str) -> Path:

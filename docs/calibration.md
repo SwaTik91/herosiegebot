@@ -37,6 +37,25 @@ pixels, and region overlap remains at least 0.8 IoU. These are synthetic
 robustness checks on one source image, not claims of live multi-frame,
 multi-resolution, UI-scale, or Windows stability.
 
+## Calibration order and diagnostics
+
+Calibration is strict-template-first. Every configured profile gets the first
+opportunity to match its anchors over a stable frame window; a valid template
+profile always wins over the proportional fallback.
+
+If all template profiles are rejected, the fallback derives the configured
+regions as proportions of the full client frame. It requires at least three
+consecutive frames, and all three must be focused with identical image
+dimensions and identical client rectangles. A focus loss or geometry change
+keeps calibration pending instead of accepting an unstable fallback.
+
+The CLI prints changed calibration diagnostics with a `calibration:` prefix.
+They report stable-frame progress, template rejection, focus or geometry
+instability, and whether calibration completed with template anchors or
+proportional geometry. Repeated identical messages are suppressed. Diagnostic
+output explains the current decision; it does not enable input or weaken any
+safety check.
+
 ## Windows frame collection
 
 Use Python 3.12 and run from the repository root:
@@ -62,6 +81,13 @@ python scripts\collect_frames.py --output-dir calibration-frames\borderless-move
 For the third set, use borderless mode, move the window away from `(0, 0)`, and
 resize it once. Record Windows display scaling, in-game UI scale, game build,
 location, and the client size printed in each filename.
+
+Validated detector templates created from these captures are external user
+data. They belong in `src\hero_siege_bot\assets\templates\*.png` for an editable
+Windows install and are not distributed in release artifacts. Before
+extracting a fresh release, copy those PNG files outside the installation.
+Extract the release into a new folder, re-add the saved templates at the same
+path, and rerun `python -m pip install -e .`.
 
 ## Annotation and tuning procedure
 
