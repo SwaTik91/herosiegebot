@@ -6,7 +6,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from hero_siege_bot.config import ExplorationConfig
-from hero_siege_bot.domain import Action, MapMasks, Point
+from hero_siege_bot.domain import Action, MapMasks, Point, normalize_pixel_index
 
 
 def _clean_mask(
@@ -257,9 +257,10 @@ class FrontierExplorer:
     @staticmethod
     def _normalized_point(row: int, column: int, shape: tuple[int, int]) -> Point:
         height, width = shape
-        x = column / (width - 1) if width > 1 else 0.0
-        y = row / (height - 1) if height > 1 else 0.0
-        return Point(x=x, y=y)
+        return Point(
+            x=normalize_pixel_index(column, width),
+            y=normalize_pixel_index(row, height),
+        )
 
     @staticmethod
     def _point_distance(first: Point, second: Point) -> float:

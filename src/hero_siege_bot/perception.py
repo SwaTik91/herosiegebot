@@ -11,7 +11,7 @@ from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
 from hero_siege_bot.config import BotConfig
 from hero_siege_bot.detectors import BarReader, Detector
-from hero_siege_bot.domain import Observation, Point, Rect
+from hero_siege_bot.domain import Detection, Observation, Point, Rect, normalize_pixel_index
 from hero_siege_bot.exploration import segment_minimap
 
 _REQUIRED_REGIONS = ("health", "resource", "minimap", "gameplay", "screen_state")
@@ -61,17 +61,35 @@ class Perception:
         movement_progress = self._movement_progress(player)
 
         confidence = self._config.combat.detection_confidence
-        enemies = tuple(
-            detection
-            for detection in self._enemy_detector.detect(crops["gameplay"])
-            if detection.confidence >= confidence
+        enemies = self._frame_detections(
+            tuple(
+                detection
+                for detection in self._enemy_detector.detect(crops["gameplay"])
+                if detection.confidence >= confidence
+            ),
+            calibration.regions["gameplay"],
+            frame.image.shape,
         )
-        loot = tuple(
-            detection
-            for detection in self._loot_detector.detect(crops["gameplay"])
-            if detection.confidence >= confidence
+        loot = self._frame_detections(
+            tuple(
+                detection
+                for detection in self._loot_detector.detect(crops["gameplay"])
+                if detection.confidence >= confidence
+            ),
+            calibration.regions["gameplay"],
+            frame.image.shape,
         )
         states = self._screen_state_detector.detect(crops["screen_state"])
+        restart_detections = self._frame_detections(
+            tuple(detection for detection in states if detection.kind == "restart"),
+            calibration.regions["screen_state"],
+            frame.image.shape,
+        )
+        restart = max(
+            restart_detections,
+            key=lambda detection: detection.confidence,
+            default=None,
+        )
         return Observation(
             timestamp=frame.timestamp,
             calibrated=True,
@@ -83,11 +101,10 @@ class Perception:
             enemies=enemies,
             loot=loot,
             dead=any(detection.kind == "death" for detection in states),
-            restart_visible=any(
-                detection.kind == "restart" for detection in states
-            ),
+            restart_visible=restart is not None,
             movement_progress=movement_progress,
             map_masks=map_masks,
+            restart_target=restart.center if restart is not None else None,
         )
 
     def _locate_player(self, minimap: NDArray[np.uint8]) -> Point | None:
@@ -118,8 +135,33 @@ class Perception:
             return None
         label = max(candidates, key=lambda item: stats[item, cv2.CC_STAT_AREA])
         return Point(
-            x=float(centroids[label, 0] / minimap.shape[1]),
-            y=float(centroids[label, 1] / minimap.shape[0]),
+            x=normalize_pixel_index(float(centroids[label, 0]), minimap.shape[1]),
+            y=normalize_pixel_index(float(centroids[label, 1]), minimap.shape[0]),
+        )
+
+    @staticmethod
+    def _frame_detections(
+        detections: tuple[Detection, ...],
+        region: Rect,
+        frame_shape: tuple[int, ...],
+    ) -> tuple[Detection, ...]:
+        frame_height, frame_width = frame_shape[:2]
+        return tuple(
+            Detection(
+                kind=detection.kind,
+                center=Point(
+                    normalize_pixel_index(
+                        region.x + detection.center.x * max(0, region.width - 1),
+                        frame_width,
+                    ),
+                    normalize_pixel_index(
+                        region.y + detection.center.y * max(0, region.height - 1),
+                        frame_height,
+                    ),
+                ),
+                confidence=detection.confidence,
+            )
+            for detection in detections
         )
 
     def _movement_progress(self, player: Point | None) -> float:
@@ -172,4 +214,5 @@ class Perception:
             dead=False,
             restart_visible=False,
             movement_progress=0.0,
+            restart_target=None,
         )

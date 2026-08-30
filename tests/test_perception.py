@@ -121,12 +121,15 @@ def test_perception_composes_calibrated_crops_into_immutable_observation() -> No
     assert observation.health_ratio == pytest.approx(0.5)
     assert observation.resource_ratio == pytest.approx(0.25)
     assert observation.player_map_position is not None
-    assert observation.player_map_position.x == pytest.approx(0.65, abs=0.02)
-    assert observation.player_map_position.y == pytest.approx(0.45, abs=0.02)
+    assert observation.player_map_position.x == pytest.approx(26 / 39, abs=0.02)
+    assert observation.player_map_position.y == pytest.approx(18 / 39, abs=0.02)
     assert len(observation.enemies) == 1
     assert len(observation.loot) == 1
     assert observation.dead is True
     assert observation.restart_visible is True
+    assert observation.restart_target is not None
+    assert observation.restart_target.x == pytest.approx(149 / 159)
+    assert observation.restart_target.y == pytest.approx(78 / 99)
     assert observation.movement_progress > 0.0
     assert observation.map_masks is not None
     expected_masks = segment_minimap(

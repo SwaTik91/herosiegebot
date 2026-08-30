@@ -46,9 +46,7 @@ class DiagnosticsOverlay:
                 cv2.LINE_AA,
             )
 
-        gameplay = calibration.regions.get(
-            "gameplay", Rect(0, 0, rendered.shape[1], rendered.shape[0])
-        )
+        gameplay = Rect(0, 0, rendered.shape[1], rendered.shape[0])
         for detection in observation.enemies:
             self._marker(rendered, gameplay, detection.center, (0, 0, 255), "enemy")
         for detection in observation.loot:
@@ -208,6 +206,7 @@ class JsonlRecorder:
             "loot": [asdict(item) for item in observation.loot],
             "dead": observation.dead,
             "restart_visible": observation.restart_visible,
+            "restart_target": self._point(observation.restart_target),
             "actions": [asdict(action) for action in actions],
         }
         with self._events_path.open("a", encoding="utf-8") as events:

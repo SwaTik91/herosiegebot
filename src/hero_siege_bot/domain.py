@@ -5,6 +5,19 @@ import numpy as np
 from numpy.typing import NDArray
 
 
+def normalize_pixel_index(index: float, dimension: int) -> float:
+    """Map an image pixel index to edge-inclusive [0, 1] coordinates.
+
+    Pixel index zero maps to 0 and index ``dimension - 1`` maps to 1. A
+    single-pixel dimension maps to 0 because it has no distinct far edge.
+    """
+    if dimension <= 0:
+        raise ValueError("pixel dimension must be positive")
+    if dimension == 1:
+        return 0.0
+    return float(np.clip(index / (dimension - 1), 0.0, 1.0))
+
+
 class BotState(StrEnum):
     CALIBRATING = auto()
     EXPLORING = auto()
@@ -72,6 +85,7 @@ class Observation:
     restart_visible: bool
     movement_progress: float
     map_masks: MapMasks | None = None
+    restart_target: Point | None = None
 
 
 @dataclass(frozen=True)

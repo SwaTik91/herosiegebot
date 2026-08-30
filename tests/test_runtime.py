@@ -27,10 +27,16 @@ from hero_siege_bot.domain import (
 from hero_siege_bot.runtime import BotRuntime
 
 
-def frame(*, focused: bool = True, timestamp: float = 1.0) -> CapturedFrame:
+def frame(
+    *,
+    focused: bool = True,
+    timestamp: float = 1.0,
+    client_rect: Rect | None = None,
+    image_size: tuple[int, int] = (20, 20),
+) -> CapturedFrame:
     return CapturedFrame(
-        image=np.zeros((20, 20, 3), dtype=np.uint8),
-        client_rect=Rect(0, 0, 20, 20),
+        image=np.zeros((*image_size, 3), dtype=np.uint8),
+        client_rect=client_rect or Rect(0, 0, 20, 20),
         focused=focused,
         timestamp=timestamp,
     )
@@ -103,6 +109,8 @@ class ExplorerFake:
         self.target = Point(0.8, 0.5)
         self.blacklisted = False
         self.progress_calls = 0
+        self.progressed = True
+        self.progress_results: list[bool] = []
 
     def choose_target(self, map_masks: MapMasks, player: Point) -> Point | None:
         del map_masks, player
@@ -115,7 +123,9 @@ class ExplorerFake:
     def record_progress(self, player: Point, map_masks: MapMasks) -> bool:
         del player, map_masks
         self.progress_calls += 1
-        return False
+        if self.progress_results:
+            return self.progress_results.pop(0)
+        return self.progressed
 
     def blacklist_current_target(self) -> None:
         self.blacklisted = True
@@ -125,6 +135,7 @@ class ControllerFake:
     def __init__(self, actions: tuple[Action, ...] = ()) -> None:
         self.result = actions
         self.calls = 0
+        self.abandoned = False
 
     def actions(self, observed: Observation, now: float) -> tuple[Action, ...]:
         del observed, now
@@ -146,6 +157,8 @@ class InputSpy:
     def __init__(self) -> None:
         self.executed: list[tuple[Action, ...]] = []
         self.release_all_calls = 0
+        self.geometries: list[Rect] = []
+        self.closed = False
 
     def execute(self, actions: Sequence[Action]) -> None:
         self.executed.append(tuple(actions))
@@ -155,6 +168,15 @@ class InputSpy:
 
     def release_all(self) -> None:
         self.release_all_calls += 1
+
+    def update_geometry(self, client_rect: Rect) -> bool:
+        changed = bool(self.geometries and self.geometries[-1] != client_rect)
+        self.geometries.append(client_rect)
+        return changed
+
+    def close(self) -> None:
+        self.closed = True
+        self.release_all()
 
 
 @pytest.fixture
@@ -172,6 +194,7 @@ def runtime_parts() -> dict[str, object]:
         "calibration_confidence": 0.9,
         "no_progress_sample_limit": 3,
         "movement_pulse_s": 0.1,
+        "detection_confidence": 0.7,
     }
 
 
@@ -193,6 +216,21 @@ def test_focus_loss_releases_input_and_pauses(
     assert input_spy.release_all_calls == 1
 
 
+def test_focus_loss_precedes_simultaneous_geometry_change(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(
+        focused=False,
+        client_rect=Rect(100, 50, 30, 20),
+        image_size=(20, 30),
+    )
+
+    assert runtime.step() is BotState.PAUSED
+
+
 def test_calibration_completes_before_any_input(
     runtime: BotRuntime, runtime_parts: dict[str, object]
 ) -> None:
@@ -206,6 +244,41 @@ def test_calibration_completes_before_any_input(
     assert input_spy.executed == [
         (Action("key_hold", key="D", duration_s=0.1),)
     ]
+
+
+def test_geometry_change_releases_updates_input_and_requires_recalibration(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    capture = runtime_parts["capture"]
+    calibrator = runtime_parts["calibrator"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(capture, CaptureFake)
+    assert isinstance(calibrator, CalibratorFake)
+    assert isinstance(input_spy, InputSpy)
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(client_rect=Rect(100, 50, 30, 20), image_size=(20, 30))
+
+    assert runtime.step() is BotState.CALIBRATING
+    assert input_spy.release_all_calls == 1
+    assert input_spy.geometries[-1] == Rect(100, 50, 30, 20)
+    assert len(input_spy.executed) == 1
+    assert runtime.step() is BotState.EXPLORING
+    assert calibrator.calls == 2
+
+
+def test_frame_dimension_change_invalidates_cached_calibration(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    capture = runtime_parts["capture"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(capture, CaptureFake)
+    assert isinstance(input_spy, InputSpy)
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(client_rect=Rect(0, 0, 20, 20), image_size=(21, 20))
+
+    assert runtime.step() is BotState.CALIBRATING
+    assert input_spy.release_all_calls == 1
+    assert len(input_spy.executed) == 1
 
 
 def test_low_confidence_observation_releases_input_and_pauses(
@@ -226,16 +299,32 @@ def test_no_progress_enters_recovery_after_three_samples(
     runtime: BotRuntime, runtime_parts: dict[str, object]
 ) -> None:
     perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
     assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    explorer.progressed = False
     perception.observations = [observation(movement_progress=0.0)] * 3
 
     states = [runtime.step() for _ in range(3)]
 
     assert states == [BotState.EXPLORING, BotState.EXPLORING, BotState.RECOVERING]
-    explorer = runtime_parts["explorer"]
-    assert isinstance(explorer, ExplorerFake)
-    assert explorer.progress_calls == 0
+    assert explorer.progress_calls == 3
     assert not explorer.blacklisted
+
+
+def test_fog_reveal_progress_prevents_recovery_without_position_change(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    perception = runtime_parts["perception"]
+    explorer = runtime_parts["explorer"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(explorer, ExplorerFake)
+    explorer.record_progress = lambda player, map_masks: True  # type: ignore[method-assign]
+    perception.observations = [observation(movement_progress=0.0)] * 4
+
+    states = [runtime.step() for _ in range(4)]
+
+    assert states == [BotState.EXPLORING] * 4
 
 
 def test_missing_exploration_geometry_releases_input_and_pauses(
@@ -259,6 +348,9 @@ def test_recovery_releases_then_pulses_orthogonal_and_reverse(
     input_spy = runtime_parts["input_controller"]
     assert isinstance(perception, PerceptionFake)
     assert isinstance(input_spy, InputSpy)
+    explorer = runtime_parts["explorer"]
+    assert isinstance(explorer, ExplorerFake)
+    explorer.progressed = False
     perception.observations = [observation(movement_progress=0.0)] * 6
 
     states = [runtime.step() for _ in range(6)]
@@ -292,6 +384,7 @@ def test_recovery_progress_resumes_without_blacklisting(
     explorer = runtime_parts["explorer"]
     assert isinstance(perception, PerceptionFake)
     assert isinstance(explorer, ExplorerFake)
+    explorer.progress_results = [False, False, False, False, True]
     perception.observations = [
         observation(movement_progress=0.0),
         observation(movement_progress=0.0),
@@ -333,6 +426,9 @@ def test_recovery_release_is_recorded_before_normal_execution(
     runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
     perception = runtime_parts["perception"]
     assert isinstance(perception, PerceptionFake)
+    explorer = runtime_parts["explorer"]
+    assert isinstance(explorer, ExplorerFake)
+    explorer.progressed = False
     perception.observations = [observation(movement_progress=0.0)] * 3
 
     runtime.step()
@@ -366,7 +462,21 @@ def test_combat_preempts_exploration_and_combines_survival(
     ]
 
 
-def test_loot_timeout_emits_no_input_actions(runtime_parts: dict[str, object]) -> None:
+def test_runtime_passes_configured_detection_confidence_to_state_machine(
+    runtime_parts: dict[str, object],
+) -> None:
+    runtime_parts["detection_confidence"] = 0.95
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    assert isinstance(perception, PerceptionFake)
+    perception.observations = [
+        observation(enemies=(Detection("enemy", Point(0.4, 0.5), 0.9),))
+    ]
+
+    assert runtime.step() is BotState.EXPLORING
+
+
+def test_loot_timeout_abandons_persistent_detection(runtime_parts: dict[str, object]) -> None:
     combat_config = CombatConfig(
         detection_confidence=0.7,
         attack_hold_s=0.1,
@@ -389,10 +499,36 @@ def test_loot_timeout_emits_no_input_actions(runtime_parts: dict[str, object]) -
 
     assert runtime.step() is BotState.COMBAT
     assert runtime.step() is BotState.LOOTING
-    assert runtime.step() is BotState.LOOTING
+    assert runtime.step() is not BotState.LOOTING
     input_spy = runtime_parts["input_controller"]
     assert isinstance(input_spy, InputSpy)
-    assert input_spy.executed[-1] == ()
+    assert input_spy.release_all_calls >= 1
+
+
+def test_combat_timeout_abandons_persistent_detection(
+    runtime_parts: dict[str, object],
+) -> None:
+    from hero_siege_bot.controllers import CombatController
+
+    combat_config = CombatConfig(
+        detection_confidence=0.7,
+        attack_hold_s=0.1,
+        skill_cooldowns_s=MappingProxyType({"Q": 1.0, "E": 1.0}),
+        combat_timeout_s=1.0,
+        loot_timeout_s=1.0,
+    )
+    runtime_parts["combat"] = CombatController(combat_config)
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    perception = runtime_parts["perception"]
+    assert isinstance(perception, PerceptionFake)
+    enemy = Detection("enemy", Point(0.5, 0.5), 0.9)
+    perception.observations = [
+        observation(enemies=(enemy,), timestamp=1.0),
+        observation(enemies=(enemy,), timestamp=2.0, movement_progress=0.0),
+    ]
+
+    assert runtime.step() is BotState.COMBAT
+    assert runtime.step() is not BotState.COMBAT
 
 
 def test_death_restart_click_invalidates_calibration(
@@ -406,17 +542,34 @@ def test_death_restart_click_invalidates_calibration(
     assert isinstance(calibrator, CalibratorFake)
     perception.observations = [
         observation(dead=True),
-        observation(restart_visible=True),
+        observation(restart_visible=True, restart_target=Point(0.72, 0.61)),
     ]
 
     assert runtime.step() is BotState.DEAD
     assert runtime.step() is BotState.RESTARTING
     assert input_spy.executed[-1] == (
-        Action("mouse_move", target=Point(0.5, 0.5)),
+        Action("mouse_move", target=Point(0.72, 0.61)),
         Action("mouse_hold", key="left", duration_s=0.05),
     )
     assert runtime.step() is BotState.EXPLORING
     assert calibrator.calls == 2
+
+
+def test_restarting_without_verified_target_emits_no_click(
+    runtime: BotRuntime, runtime_parts: dict[str, object]
+) -> None:
+    perception = runtime_parts["perception"]
+    input_spy = runtime_parts["input_controller"]
+    assert isinstance(perception, PerceptionFake)
+    assert isinstance(input_spy, InputSpy)
+    perception.observations = [
+        observation(dead=True),
+        observation(restart_visible=True, restart_target=None),
+    ]
+
+    assert runtime.step() is BotState.DEAD
+    assert runtime.step() is BotState.DEAD
+    assert input_spy.executed[-1] == ()
 
 
 def test_decision_is_recorded_before_actions_are_executed(
@@ -475,7 +628,7 @@ def test_run_releases_input_when_stopped(
 
     input_spy = runtime_parts["input_controller"]
     assert isinstance(input_spy, InputSpy)
-    assert input_spy.release_all_calls == 1
+    assert input_spy.closed
 
 
 def test_jsonl_recorder_writes_serializable_event_and_evidence(tmp_path: Path) -> None:
@@ -652,3 +805,32 @@ def test_cli_run_requires_explicit_input_enablement(
 
     with pytest.raises(SystemExit, match="enable-input"):
         cli.main(["run", "--config", str(config_path)])
+
+
+def test_runtime_construction_aborts_when_mandatory_hotkey_registration_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hero_siege_bot.input import DryRunInputBackend
+
+    class FailingHotkey:
+        def register(self, callback: object) -> None:
+            del callback
+            raise RuntimeError("RegisterHotKey failed")
+
+        def unregister(self) -> None:
+            raise AssertionError("unregister should not run after failed registration")
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}")
+    monkeypatch.setattr(cli, "_load_template", lambda name: np.zeros((2, 2, 3), np.uint8))
+    monkeypatch.setattr(cli, "_load_calibrator", lambda config: CalibratorFake())
+    monkeypatch.setattr(cli, "_build_recorder", lambda config, root: None)
+
+    with pytest.raises(RuntimeError, match="RegisterHotKey failed"):
+        cli.build_runtime(
+            cli.load_config(config_path),
+            DryRunInputBackend(),
+            capture=CaptureFake(),
+            diagnostics_root=tmp_path,
+            hotkey=FailingHotkey(),  # type: ignore[arg-type]
+        )

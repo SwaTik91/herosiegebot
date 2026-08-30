@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-from hero_siege_bot.domain import Detection, Point
+from hero_siege_bot.domain import Detection, Point, normalize_pixel_index
 
 HSV = tuple[int, int, int]
 
@@ -110,8 +110,12 @@ def _to_detection(
     return Detection(
         kind=candidate.kind,
         center=Point(
-            x=float((candidate.x + candidate.width / 2.0) / image_width),
-            y=float((candidate.y + candidate.height / 2.0) / image_height),
+            x=normalize_pixel_index(
+                candidate.x + (candidate.width - 1) / 2.0, image_width
+            ),
+            y=normalize_pixel_index(
+                candidate.y + (candidate.height - 1) / 2.0, image_height
+            ),
         ),
         confidence=float(np.clip(candidate.confidence, 0.0, 1.0)),
     )
@@ -215,8 +219,8 @@ class MotionColorDetector:
             area = int(stats[label, cv2.CC_STAT_AREA])
             if area < self._min_area:
                 continue
-            x = float(centroids[label, 0]) / image.shape[1]
-            y = float(centroids[label, 1]) / image.shape[0]
+            x = normalize_pixel_index(float(centroids[label, 0]), image.shape[1])
+            y = normalize_pixel_index(float(centroids[label, 1]), image.shape[0])
             bbox_area = int(
                 stats[label, cv2.CC_STAT_WIDTH] * stats[label, cv2.CC_STAT_HEIGHT]
             )

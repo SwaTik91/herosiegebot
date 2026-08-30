@@ -19,7 +19,14 @@ from hero_siege_bot.controllers import CombatController, LootController, Surviva
 from hero_siege_bot.detectors import ScreenStateDetector, TemplateDetector
 from hero_siege_bot.diagnostics import DiagnosticsOverlay, JsonlRecorder
 from hero_siege_bot.exploration import FrontierExplorer
-from hero_siege_bot.input import DryRunInputBackend, InputBackend, SafeInput, SendInputBackend
+from hero_siege_bot.input import (
+    DryRunInputBackend,
+    EmergencyHotkey,
+    InputBackend,
+    SafeInput,
+    SendInputBackend,
+    WindowsF12Hotkey,
+)
 from hero_siege_bot.perception import Perception
 from hero_siege_bot.runtime import BotRuntime, Capture
 
@@ -106,6 +113,7 @@ def build_runtime(
     *,
     capture: Capture | None = None,
     diagnostics_root: Path = Path("diagnostics"),
+    hotkey: EmergencyHotkey | None = None,
 ) -> BotRuntime:
     window_capture = capture or WindowCapture(config.window.title)
     detector_config = config.detectors
@@ -136,6 +144,7 @@ def build_runtime(
         backend,
         max_key_hold_s=config.exploration.max_movement_pulse_s,
         max_mouse_hold_s=config.combat.attack_hold_s,
+        hotkey=hotkey,
     )
     return BotRuntime(
         capture=window_capture,
@@ -150,6 +159,7 @@ def build_runtime(
         calibration_confidence=config.calibration.confidence_threshold,
         no_progress_sample_limit=config.exploration.no_progress_sample_limit,
         movement_pulse_s=config.exploration.movement_pulse_s,
+        detection_confidence=config.combat.detection_confidence,
     )
 
 
@@ -163,6 +173,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     config = load_config(arguments.config)
     capture: WindowCapture | None = None
+    hotkey: EmergencyHotkey | None = None
     if arguments.command == "dry-run":
         backend: InputBackend = DryRunInputBackend()
     else:
@@ -171,8 +182,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if client_rect is None:
             _abort("Hero Siege window was not found")
         backend = SendInputBackend(client_rect)
+        hotkey = WindowsF12Hotkey()
 
-    runtime = build_runtime(config, backend, capture=capture)
+    runtime = build_runtime(config, backend, capture=capture, hotkey=hotkey)
     stop = threading.Event()
 
     def request_stop(signum: int, frame: object) -> None:

@@ -11,6 +11,13 @@ from hero_siege_bot.detectors import (
     ScreenStateDetector,
     TemplateDetector,
 )
+from hero_siege_bot.domain import normalize_pixel_index
+
+
+def test_normalized_pixel_coordinates_are_edge_inclusive_with_single_pixel_guard() -> None:
+    assert normalize_pixel_index(0.0, 5) == 0.0
+    assert normalize_pixel_index(4.0, 5) == 1.0
+    assert normalize_pixel_index(0.0, 1) == 0.0
 
 
 def _bar(ratio: float, *, damaged_border: bool = False) -> NDArray[np.uint8]:
@@ -78,10 +85,10 @@ def test_template_detector_returns_two_non_overlapping_normalized_matches() -> N
     assert len(detections) == 2
     assert detections[0].kind == detections[1].kind == "loot"
     assert sorted(detection.center.x for detection in detections) == pytest.approx(
-        [0.15, 0.75], abs=0.01
+        [15 / 99, 75 / 99]
     )
     assert sorted(detection.center.y for detection in detections) == pytest.approx(
-        [0.15, 0.65], abs=0.01
+        [9 / 59, 39 / 59]
     )
     assert all(0.99 <= detection.confidence <= 1.0 for detection in detections)
 
@@ -124,8 +131,8 @@ def test_motion_color_detector_requires_colored_sprite_to_move() -> None:
 
     assert len(detections) == 1
     assert detections[0].kind == "enemy"
-    assert detections[0].center.x == pytest.approx(0.48125)
-    assert detections[0].center.y == pytest.approx(0.45)
+    assert detections[0].center.x == pytest.approx(38.5 / 79)
+    assert detections[0].center.y == pytest.approx(22.5 / 49)
     assert 0.0 <= detections[0].confidence <= 1.0
 
 

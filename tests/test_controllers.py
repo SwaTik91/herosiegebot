@@ -81,6 +81,7 @@ def test_combat_stops_emitting_actions_at_encounter_timeout() -> None:
     assert controller.actions(observed, now=20.0)
     assert controller.actions(observed, now=29.9)
     assert controller.actions(observed, now=30.0) == ()
+    assert controller.abandoned
 
 
 def test_combat_timeout_resets_after_enemies_clear() -> None:
@@ -90,6 +91,7 @@ def test_combat_timeout_resets_after_enemies_clear() -> None:
     assert controller.actions(observed, now=20.0)
     assert controller.actions(observed, now=30.0) == ()
     assert controller.actions(observation(), now=31.0) == ()
+    assert not controller.abandoned
     assert controller.actions(observed, now=40.0)
 
 
@@ -145,6 +147,7 @@ def test_loot_times_out_at_configured_deadline() -> None:
     assert initial[1].duration_s == 0.25
     assert before_deadline
     assert at_deadline == ()
+    assert controller.abandoned
 
 
 def test_loot_timeout_resets_after_loot_disappears() -> None:
@@ -153,4 +156,5 @@ def test_loot_timeout_resets_after_loot_disappears() -> None:
 
     assert controller.actions(observed, now=1.0)
     assert controller.actions(observation(), now=2.0) == ()
+    assert not controller.abandoned
     assert controller.actions(observed, now=10.0)

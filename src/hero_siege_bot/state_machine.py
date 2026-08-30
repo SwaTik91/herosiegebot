@@ -60,7 +60,7 @@ class BotStateMachine:
             return BotState.RECOVERING
 
         if self.state is BotState.DEAD:
-            if observation.restart_visible:
+            if observation.restart_target is not None:
                 return BotState.RESTARTING
             return BotState.DEAD
 

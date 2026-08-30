@@ -62,6 +62,24 @@ def test_focus_loss_always_pauses() -> None:
         assert machine.update(observation(focused=False)) is BotState.PAUSED
 
 
+def test_focus_loss_precedes_simultaneous_death_and_calibration_loss() -> None:
+    machine = BotStateMachine(BotState.COMBAT)
+
+    assert (
+        machine.update(observation(focused=False, calibrated=False, dead=True))
+        is BotState.PAUSED
+    )
+
+
+def test_calibration_loss_precedes_death_while_focus_remains() -> None:
+    machine = BotStateMachine(BotState.COMBAT)
+
+    assert (
+        machine.update(observation(focused=True, calibrated=False, dead=True))
+        is BotState.CALIBRATING
+    )
+
+
 def test_lost_calibration_preempts_non_paused_states() -> None:
     for state in BotState:
         if state is BotState.PAUSED:
@@ -126,7 +144,21 @@ def test_recovery_returns_to_exploration_after_progress() -> None:
 def test_dead_enters_restarting_when_restart_is_visible() -> None:
     machine = BotStateMachine(BotState.DEAD)
 
-    assert machine.update(observation(restart_visible=True)) is BotState.RESTARTING
+    assert (
+        machine.update(
+            observation(
+                restart_visible=True,
+                restart_target=Point(0.6, 0.7),
+            )
+        )
+        is BotState.RESTARTING
+    )
+
+
+def test_dead_waits_when_restart_has_no_verified_target() -> None:
+    machine = BotStateMachine(BotState.DEAD)
+
+    assert machine.update(observation(restart_visible=True)) is BotState.DEAD
 
 
 def test_restarting_enters_calibrating_after_restart() -> None:

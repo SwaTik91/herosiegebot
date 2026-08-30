@@ -24,6 +24,7 @@ class CombatController:
         self._config = config
         self._last_skill_use: dict[str, float] = {}
         self._started_at: float | None = None
+        self.abandoned = False
 
     def actions(self, observation: Observation, now: float) -> tuple[Action, ...]:
         target = _best_detection(
@@ -32,11 +33,14 @@ class CombatController:
         )
         if target is None:
             self._started_at = None
+            self.abandoned = False
             return ()
         if self._started_at is None:
             self._started_at = now
         if now - self._started_at >= self._config.combat_timeout_s:
+            self.abandoned = True
             return ()
+        self.abandoned = False
 
         actions = [
             Action(kind="mouse_move", target=target.center),
@@ -98,6 +102,7 @@ class LootController:
     def __init__(self, config: CombatConfig) -> None:
         self._config = config
         self._started_at: float | None = None
+        self.abandoned = False
 
     def actions(self, observation: Observation, now: float) -> tuple[Action, ...]:
         target = _best_detection(
@@ -106,11 +111,14 @@ class LootController:
         )
         if target is None:
             self._started_at = None
+            self.abandoned = False
             return ()
         if self._started_at is None:
             self._started_at = now
         if now - self._started_at >= self._config.loot_timeout_s:
+            self.abandoned = True
             return ()
+        self.abandoned = False
         return (
             Action(kind="mouse_move", target=target.center),
             Action(

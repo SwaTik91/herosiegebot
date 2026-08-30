@@ -8,7 +8,7 @@ from typing import Protocol
 
 from hero_siege_bot.calibration import Calibration
 from hero_siege_bot.capture import CapturedFrame
-from hero_siege_bot.domain import Action, BotState, MapMasks, Observation, Point
+from hero_siege_bot.domain import Action, BotState, MapMasks, Observation, Point, Rect
 from hero_siege_bot.state_machine import BotStateMachine
 
 
@@ -58,6 +58,10 @@ class InputController(Protocol):
 
     def release_all(self) -> None: ...
 
+    def update_geometry(self, client_rect: Rect) -> bool: ...
+
+    def close(self) -> None: ...
+
 
 class BotRuntime:
     """Coordinates perception and bounded actions behind a fail-safe boundary."""
@@ -77,6 +81,7 @@ class BotRuntime:
         calibration_confidence: float,
         no_progress_sample_limit: int,
         movement_pulse_s: float,
+        detection_confidence: float,
         state_machine: BotStateMachine | None = None,
     ) -> None:
         if not 0.0 <= calibration_confidence <= 1.0:
@@ -95,12 +100,15 @@ class BotRuntime:
         self.recorder = recorder
         self.input = input_controller
         self._machine = state_machine or BotStateMachine(
-            calibration_confidence=calibration_confidence
+            calibration_confidence=calibration_confidence,
+            detection_confidence=detection_confidence,
         )
         self._calibration_confidence = calibration_confidence
         self._no_progress_sample_limit = no_progress_sample_limit
         self._movement_pulse_s = movement_pulse_s
         self._calibration: Calibration | None = None
+        self._calibration_source: tuple[Rect, int, int] | None = None
+        self._last_frame_geometry: tuple[Rect, int, int] | None = None
         self._calibration_frames: deque[CapturedFrame] = deque(maxlen=30)
         self._target: Point | None = None
         self._last_movement_key: str | None = None
@@ -110,12 +118,30 @@ class BotRuntime:
     def step(self) -> BotState:
         try:
             captured = self.capture.grab()
-            if captured is None or not captured.focused:
+            if captured is None:
                 self.input.release_all()
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED
+            geometry = self._frame_geometry(captured)
+            backend_changed = self.input.update_geometry(captured.client_rect)
+            geometry_changed = (
+                self._last_frame_geometry is not None
+                and geometry != self._last_frame_geometry
+            )
+            self._last_frame_geometry = geometry
+            if not captured.focused:
+                self.input.release_all()
+                if backend_changed or geometry_changed:
+                    self._invalidate_calibration()
+                self._machine.state = BotState.PAUSED
+                return BotState.PAUSED
+            if backend_changed or geometry_changed:
+                self.input.release_all()
+                self._invalidate_calibration()
+                self._machine.state = BotState.CALIBRATING
+                return BotState.CALIBRATING
 
-            calibration = self._ensure_calibration(captured)
+            calibration = self._ensure_calibration(captured, geometry)
             if calibration is None:
                 self.input.release_all()
                 self._machine.state = BotState.CALIBRATING
@@ -159,11 +185,18 @@ class BotRuntime:
             while not stop.is_set():
                 self.step()
         finally:
-            self.input.release_all()
+            self.input.close()
 
-    def _ensure_calibration(self, captured: CapturedFrame) -> Calibration | None:
-        if self._calibration is not None:
+    def _ensure_calibration(
+        self,
+        captured: CapturedFrame,
+        geometry: tuple[Rect, int, int],
+    ) -> Calibration | None:
+        if self._calibration is not None and self._calibration_source == geometry:
             return self._calibration
+        if self._calibration is not None:
+            self.input.release_all()
+            self._invalidate_calibration()
         self._calibration_frames.append(captured)
         candidate = self.calibrator.calibrate(tuple(self._calibration_frames))
         if (
@@ -171,6 +204,7 @@ class BotRuntime:
             and candidate.confidence >= self._calibration_confidence
         ):
             self._calibration = candidate
+            self._calibration_source = geometry
             self._calibration_frames.clear()
             self._machine.state = BotState.EXPLORING
         return self._calibration
@@ -201,27 +235,30 @@ class BotRuntime:
             and self._calibration is not None
         ):
             self._machine.state = BotState.CALIBRATING
-        if (
-            self._machine.state is BotState.EXPLORING
-            and observation.movement_progress > 0.0
-        ):
+        if self._machine.state in (BotState.EXPLORING, BotState.RECOVERING):
             player = observation.player_map_position
             masks = observation.map_masks
-            if player is not None and masks is not None:
-                self.explorer.record_progress(player, masks)
-        if (
-            self._machine.state is BotState.EXPLORING
-            and observation.movement_progress <= 0.0
-        ):
-            self._no_progress_samples += 1
-            if self._no_progress_samples < self._no_progress_sample_limit:
-                state_observation = replace(observation, movement_progress=1.0)
-        elif observation.movement_progress > 0.0:
-            self._no_progress_samples = 0
+            progressed = bool(
+                player is not None
+                and masks is not None
+                and self.explorer.record_progress(player, masks)
+            )
+            state_observation = replace(
+                observation, movement_progress=1.0 if progressed else 0.0
+            )
+            if self._machine.state is BotState.EXPLORING:
+                if progressed:
+                    self._no_progress_samples = 0
+                else:
+                    self._no_progress_samples += 1
+                    if self._no_progress_samples < self._no_progress_sample_limit:
+                        state_observation = replace(
+                            state_observation, movement_progress=1.0
+                        )
 
         state = self._machine.update(state_observation)
         if state is BotState.RECOVERING:
-            return self._recover(observation)
+            return self._recover(state_observation)
         self._recovery_phase = 0
 
         release = state in (BotState.DEAD, BotState.CALIBRATING, BotState.PAUSED)
@@ -232,12 +269,27 @@ class BotRuntime:
             actions.extend(self._exploration_actions(observation))
         elif state is BotState.COMBAT:
             actions.extend(self.combat.actions(observation, observation.timestamp))
+            if bool(getattr(self.combat, "abandoned", False)):
+                self._machine.state = BotState.RECOVERING
+                recovered_state, recovered_actions, _ = self._recover(
+                    state_observation
+                )
+                return recovered_state, recovered_actions, True
         elif state is BotState.LOOTING:
             actions.extend(self.loot.actions(observation, observation.timestamp))
-        elif state is BotState.RESTARTING:
+            if bool(getattr(self.loot, "abandoned", False)):
+                self._machine.state = BotState.RECOVERING
+                recovered_state, recovered_actions, _ = self._recover(
+                    state_observation
+                )
+                return recovered_state, recovered_actions, True
+        elif (
+            state is BotState.RESTARTING
+            and observation.restart_target is not None
+        ):
             actions.extend(
                 (
-                    Action("mouse_move", target=Point(0.5, 0.5)),
+                    Action("mouse_move", target=observation.restart_target),
                     Action("mouse_hold", key="left", duration_s=0.05),
                 )
             )
@@ -334,5 +386,11 @@ class BotRuntime:
 
     def _invalidate_calibration(self) -> None:
         self._calibration = None
+        self._calibration_source = None
         self._calibration_frames.clear()
         self._target = None
+
+    @staticmethod
+    def _frame_geometry(captured: CapturedFrame) -> tuple[Rect, int, int]:
+        height, width = captured.image.shape[:2]
+        return captured.client_rect, width, height

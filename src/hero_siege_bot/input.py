@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 import time
@@ -7,6 +8,8 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Protocol, cast
 
 from hero_siege_bot.domain import Action, Point, Rect
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class InputBackend(Protocol):
@@ -23,6 +26,8 @@ class InputBackend(Protocol):
 
 class EmergencyHotkey(Protocol):
     def register(self, callback: Callable[[], None]) -> None: ...
+
+    def unregister(self) -> None: ...
 
 
 class DryRunInputBackend:
@@ -64,13 +69,12 @@ class SafeInput:
         self._pressed_keys: set[str] = set()
         self._pressed_buttons: set[str] = set()
         self._stopped = False
+        self._closed = False
         self._lock = threading.RLock()
 
-        platform_hotkey = hotkey
-        if platform_hotkey is None and sys.platform == "win32":
-            platform_hotkey = WindowsF12Hotkey()
-        if platform_hotkey is not None:
-            platform_hotkey.register(self.emergency_stop)
+        self._hotkey = hotkey
+        if hotkey is not None:
+            hotkey.register(self.emergency_stop)
 
     def execute(self, actions: Sequence[Action]) -> None:
         try:
@@ -113,6 +117,31 @@ class SafeInput:
     def reset(self) -> None:
         with self._lock:
             self._stopped = False
+
+    def update_geometry(self, client_rect: Rect) -> bool:
+        update = getattr(self._backend, "update_geometry", None)
+        if not callable(update):
+            return False
+        return bool(update(client_rect))
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        first_error: Exception | None = None
+        try:
+            self.release_all()
+        except Exception as error:  # noqa: BLE001 - unregister must still run
+            first_error = error
+        if self._hotkey is not None:
+            try:
+                self._hotkey.unregister()
+            except Exception as error:  # noqa: BLE001 - preserve release failure
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def _execute_one(self, action: Action) -> None:
         if action.kind == "release_all":
@@ -202,31 +231,92 @@ class SafeInput:
 class WindowsF12Hotkey:
     _HOTKEY_ID = 0x4853
     _WM_HOTKEY = 0x0312
+    _WM_QUIT = 0x0012
     _VK_F12 = 0x7B
+
+    def __init__(self, *, registration_timeout_s: float = 2.0) -> None:
+        if registration_timeout_s <= 0.0:
+            raise ValueError("registration_timeout_s must be positive")
+        self._registration_timeout_s = registration_timeout_s
+        self._ready = threading.Event()
+        self._shutdown = threading.Event()
+        self._registered = False
+        self._thread: threading.Thread | None = None
+        self._thread_id: int | None = None
+        self._lock = threading.Lock()
 
     def register(self, callback: Callable[[], None]) -> None:
         if sys.platform != "win32":
             raise OSError("Windows hotkeys are only available on Windows")
-        thread = threading.Thread(
-            target=self._message_loop,
-            args=(callback,),
-            name="hero-siege-emergency-hotkey",
-            daemon=True,
-        )
-        thread.start()
+        with self._lock:
+            if self._thread is not None:
+                raise RuntimeError("F12 hotkey is already registered")
+            self._ready.clear()
+            self._shutdown.clear()
+            self._registered = False
+            thread = threading.Thread(
+                target=self._message_loop,
+                args=(callback,),
+                name="hero-siege-emergency-hotkey",
+                daemon=True,
+            )
+            self._thread = thread
+            thread.start()
+        if not self._ready.wait(self._registration_timeout_s):
+            self.unregister()
+            raise TimeoutError("timed out waiting for F12 RegisterHotKey")
+        if not self._registered:
+            thread.join(self._registration_timeout_s)
+            with self._lock:
+                self._thread = None
+                self._thread_id = None
+            raise RuntimeError("RegisterHotKey failed for mandatory F12 emergency stop")
+
+    def unregister(self) -> None:
+        with self._lock:
+            thread = self._thread
+            thread_id = self._thread_id
+            if thread is None:
+                return
+            self._shutdown.set()
+        if thread_id is not None and sys.platform == "win32":
+            import ctypes
+
+            cast(Any, ctypes).windll.user32.PostThreadMessageW(
+                thread_id, self._WM_QUIT, 0, 0
+            )
+        thread.join(self._registration_timeout_s)
+        if thread.is_alive():
+            raise RuntimeError("F12 hotkey thread did not shut down")
+        with self._lock:
+            self._thread = None
+            self._thread_id = None
+            self._registered = False
+
+    def _report_registration(self, registered: bool) -> None:
+        self._registered = registered
+        self._ready.set()
 
     def _message_loop(self, callback: Callable[[], None]) -> None:
         import ctypes
         from ctypes import wintypes
 
         user32 = cast(Any, ctypes).windll.user32
-        if not user32.RegisterHotKey(None, self._HOTKEY_ID, 0, self._VK_F12):
+        self._thread_id = cast(Any, ctypes).windll.kernel32.GetCurrentThreadId()
+        registered = bool(
+            user32.RegisterHotKey(None, self._HOTKEY_ID, 0, self._VK_F12)
+        )
+        self._report_registration(registered)
+        if not registered:
             return
         message = wintypes.MSG()
         try:
             while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
                 if message.message == self._WM_HOTKEY:
-                    callback()
+                    try:
+                        callback()
+                    except Exception:
+                        _LOGGER.exception("F12 emergency-stop callback failed")
         finally:
             user32.UnregisterHotKey(None, self._HOTKEY_ID)
 
@@ -260,6 +350,13 @@ class SendInputBackend:
         if client_rect.width <= 0 or client_rect.height <= 0:
             raise ValueError("client rectangle must have positive dimensions")
         self._client_rect: Rect = client_rect
+
+    def update_geometry(self, client_rect: Rect) -> bool:
+        if client_rect.width <= 0 or client_rect.height <= 0:
+            raise ValueError("client rectangle must have positive dimensions")
+        changed = client_rect != self._client_rect
+        self._client_rect = client_rect
+        return changed
 
     def key_down(self, key: str) -> None:
         self._send_keyboard(key, key_up=False)
