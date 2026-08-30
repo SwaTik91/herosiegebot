@@ -204,6 +204,7 @@ class BotRuntime:
                 self._calibration_diagnostic = "capture unavailable"
                 self._machine.state = BotState.PAUSED
                 return BotState.PAUSED
+            self._show_yolo_overlay(captured)
             geometry = self._frame_geometry(captured)
             backend_changed = self.input.update_geometry(captured.client_rect)
             geometry_changed = (
@@ -245,7 +246,6 @@ class BotRuntime:
                         (),
                         calibration,
                     )
-                self._show_live_overlay(captured, observed)
                 self._invalidate_calibration()
                 return BotState.PAUSED
 
@@ -255,7 +255,6 @@ class BotRuntime:
             if self.recorder is not None:
                 self.recorder.record(observed, state, actions)
                 self._record_frame(captured, observed, state, actions, calibration)
-            self._show_live_overlay(captured, observed)
             self.input.execute(actions)
             if state is BotState.RESTARTING:
                 self._invalidate_calibration()
@@ -550,6 +549,28 @@ class BotRuntime:
             return None
         return {"W": "S", "S": "W", "A": "D", "D": "A"}.get(key)
 
+    def _show_yolo_overlay(self, captured: CapturedFrame) -> None:
+        detect = getattr(self.perception, "detect_yolo", None)
+        yolo = detect(captured.image) if callable(detect) else ()
+        self._show_live_overlay(
+            captured,
+            Observation(
+                timestamp=captured.timestamp,
+                calibrated=False,
+                calibration_confidence=0.0,
+                focused=captured.focused,
+                health_ratio=None,
+                resource_ratio=None,
+                player_map_position=None,
+                enemies=(),
+                loot=(),
+                dead=False,
+                restart_visible=False,
+                movement_progress=0.0,
+                yolo=yolo,
+            ),
+        )
+
     def _show_live_overlay(
         self, captured: CapturedFrame, observation: Observation
     ) -> None:
@@ -561,6 +582,11 @@ class BotRuntime:
             return
         height, width = captured.image.shape[:2]
         self._overlay_tick += 1
+        if self._overlay_tick == 1 or self._overlay_tick % 10 == 0:
+            print(
+                f"overlay #{self._overlay_tick} yolo={len(observation.yolo)}",
+                flush=True,
+            )
         try:
             show(
                 compose_live_overlay(

@@ -13,16 +13,15 @@ from hero_siege_bot.domain import Rect
 OVERLAY_CLASS_NAME = "HeroSiegeBotLiveOverlay"
 
 
-def is_game_focused(game_hwnd: int, foreground_hwnd: int, foreground_class: str) -> bool:
-    return foreground_hwnd == game_hwnd or foreground_class == OVERLAY_CLASS_NAME
-
-
-def chroma_colorref() -> int:
-    return (
-        CHROMA_KEY_BGR[0]
-        | (CHROMA_KEY_BGR[1] << 8)
-        | (CHROMA_KEY_BGR[2] << 16)
-    )
+def is_game_focused(
+    game_hwnd: int,
+    foreground_hwnd: int,
+    foreground_class: str,
+    foreground_title: str = "",
+) -> bool:
+    if foreground_hwnd == game_hwnd or foreground_class == OVERLAY_CLASS_NAME:
+        return True
+    return "Hero Siege Bot Overlay" in foreground_title
 
 
 def pack_dib_bgra(image: NDArray[np.uint8]) -> bytes:
@@ -31,6 +30,8 @@ def pack_dib_bgra(image: NDArray[np.uint8]) -> bytes:
     bgra = np.empty((height, width, 4), dtype=np.uint8)
     bgra[:, :, :3] = image
     bgra[:, :, 3] = 255
+    transparent = np.all(image == np.asarray(CHROMA_KEY_BGR, dtype=np.uint8), axis=2)
+    bgra[transparent] = (0, 0, 0, 0)
     return np.ascontiguousarray(np.flipud(bgra)).tobytes()
 
 
@@ -102,6 +103,8 @@ class Win32LiveOverlay:
         return int(win32gui.DefWindowProc(hwnd, msg, wparam, lparam))
 
     def _ensure_window(self, client_rect: Rect) -> None:
+        import ctypes
+
         import win32con  # type: ignore[import-not-found, import-untyped]
         import win32gui  # type: ignore[import-not-found, import-untyped]
 
@@ -138,6 +141,7 @@ class Win32LiveOverlay:
             None,
         )
         win32gui.ShowWindow(self._hwnd, win32con.SW_SHOWNOACTIVATE)
+        ctypes.windll.user32.SetWindowDisplayAffinity(int(self._hwnd), 0x00000011)
 
     def _blit(self, hwnd: int, image: NDArray[np.uint8], client_rect: Rect) -> None:
         import ctypes
@@ -173,6 +177,14 @@ class Win32LiveOverlay:
         class SIZE(ctypes.Structure):
             _fields_ = (("cx", wintypes.LONG), ("cy", wintypes.LONG))
 
+        class BLENDFUNCTION(ctypes.Structure):
+            _fields_ = (
+                ("BlendOp", ctypes.c_byte),
+                ("BlendFlags", ctypes.c_byte),
+                ("SourceConstantAlpha", ctypes.c_ubyte),
+                ("AlphaFormat", ctypes.c_byte),
+            )
+
         height, width = image.shape[:2]
         bits = pack_dib_bgra(image)
         info = BITMAPINFO()
@@ -207,7 +219,7 @@ class Win32LiveOverlay:
             wintypes.HDC,
             ctypes.POINTER(POINT),
             wintypes.COLORREF,
-            ctypes.c_void_p,
+            ctypes.POINTER(BLENDFUNCTION),
             wintypes.DWORD,
         ]
         user32.UpdateLayeredWindow.restype = wintypes.BOOL
@@ -233,6 +245,7 @@ class Win32LiveOverlay:
             dest = POINT(client_rect.x, client_rect.y)
             size = SIZE(width, height)
             origin = POINT(0, 0)
+            blend = BLENDFUNCTION(0, 0, 255, 1)
             updated = user32.UpdateLayeredWindow(
                 int(hwnd),
                 screen_hdc,
@@ -240,9 +253,9 @@ class Win32LiveOverlay:
                 ctypes.byref(size),
                 mem_dc,
                 ctypes.byref(origin),
-                chroma_colorref(),
-                None,
-                win32con.ULW_COLORKEY,
+                0,
+                ctypes.byref(blend),
+                win32con.ULW_ALPHA,
             )
             if not updated:
                 raise OSError(f"UpdateLayeredWindow failed ({ctypes.GetLastError()})")

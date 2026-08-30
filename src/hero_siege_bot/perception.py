@@ -49,6 +49,11 @@ class Perception:
         self._yolo_detector = yolo_detector
         self._previous_player: Point | None = None
 
+    def detect_yolo(self, image: NDArray[np.uint8]) -> tuple[Detection, ...]:
+        if self._yolo_detector is None:
+            return ()
+        return self._yolo_detector.detect(image)
+
     def observe(
         self, frame: CapturedFrame, calibration: Calibration
     ) -> Observation:

@@ -1358,6 +1358,21 @@ def test_runtime_pushes_live_overlay_on_calibrated_step(
     assert overlay.shown[0][1] == Rect(0, 0, 20, 20)
 
 
+def test_runtime_keeps_updating_overlay_after_focus_loss(
+    runtime_parts: dict[str, object],
+) -> None:
+    overlay = OverlaySpy()
+    runtime_parts["live_overlay"] = overlay
+    runtime = BotRuntime(**runtime_parts)  # type: ignore[arg-type]
+    capture = runtime_parts["capture"]
+    assert isinstance(capture, CaptureFake)
+
+    assert runtime.step() is BotState.EXPLORING
+    capture.next_frame = frame(focused=False)
+    assert runtime.step() is BotState.PAUSED
+    assert len(overlay.shown) == 2
+
+
 def test_runtime_keeps_running_when_live_overlay_blit_fails(
     runtime_parts: dict[str, object],
 ) -> None:

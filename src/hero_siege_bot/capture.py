@@ -122,14 +122,19 @@ class WindowCapture:
 
         foreground = win32gui.GetForegroundWindow()
         foreground_class = ""
+        foreground_title = ""
         if foreground:
             try:
                 foreground_class = win32gui.GetClassName(foreground)
+                foreground_title = win32gui.GetWindowText(foreground)
             except Exception:
                 foreground_class = ""
+                foreground_title = ""
         return CapturedFrame(
             image=np.asarray(image, dtype=np.uint8),
             client_rect=client_rect,
-            focused=is_game_focused(self._hwnd, foreground, foreground_class),
+            focused=is_game_focused(
+                self._hwnd, foreground, foreground_class, foreground_title
+            ),
             timestamp=time.time(),
         )
